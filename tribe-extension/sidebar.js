@@ -66,8 +66,8 @@ document.addEventListener('DOMContentLoaded', () => {
 async function loadAndRender() {
   const state = await bg('GET_STATE');
   if (!state) return;
-  renderTracking(state.trackingEnabled);
-  renderBudget(state.budgetPercent, state.dailyFocusMinutes ?? 0);
+  renderTracking(state.trackingEnabled ?? false);
+  renderBudget(state.budgetPercent ?? 0, state.dailyFocusMinutes ?? 0);
   renderSession(state.consecutiveFocusMinutes ?? 0, state.breakThreshold ?? 20);
   if (state.lastPageResult) {
     renderPageResult(state.lastPageResult);

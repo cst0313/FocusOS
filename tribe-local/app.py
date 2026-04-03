@@ -190,7 +190,7 @@ def dashboard():
         rows_html = '<tr><td colspan="5" class="empty">No sessions recorded today. Make sure the extension is running and tracking is ON.</td></tr>'
 
     total_focus = sum(s.get("focus_contribution", 0) for s in today_sessions)
-    budget_pct = min(round(total_focus / 100 * 100), 100)
+    budget_pct = min(round(total_focus), 100)
 
     html = f"""<!DOCTYPE html>
 <html lang="en">

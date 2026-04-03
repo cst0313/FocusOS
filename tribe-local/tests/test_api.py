@@ -170,10 +170,12 @@ async def test_dashboard_shows_session_data():
     _session_log.clear()
     # Add a session timestamped today.
     today_ts = datetime.now(timezone.utc).isoformat()
+    test_url = "https://example.com/article"
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        await client.post("/log_session", json={**SESSION_PAYLOAD, "timestamp": today_ts})
+        await client.post("/log_session", json={**SESSION_PAYLOAD, "timestamp": today_ts, "url": test_url})
         resp = await client.get("/dashboard")
-    assert "example.com" in resp.text
+    # The dashboard should display the stored URL (truncated to 60 chars in the table).
+    assert test_url[:60] in resp.text
 
 
 @pytest.mark.asyncio

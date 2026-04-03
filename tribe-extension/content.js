@@ -22,6 +22,9 @@ const MIN_BLOCK_LENGTH = 20;
 /** Maximum characters sent per block to keep API payloads reasonable. */
 const MAX_BLOCK_TEXT_LENGTH = 600;
 
+/** Minimum elapsed seconds before a reading session is reported to background. */
+const MIN_SESSION_SECONDS = 6;
+
 (function () {
   'use strict';
 
@@ -61,7 +64,7 @@ const MAX_BLOCK_TEXT_LENGTH = 600;
     const elapsedSeconds = (Date.now() - readingStartTime) / 1000;
     readingStartTime = null; // prevent double-reporting
 
-    if (elapsedSeconds < 6) return; // ignore very brief visits (< 6 s)
+    if (elapsedSeconds < MIN_SESSION_SECONDS) return; // ignore very brief visits
 
     chrome.runtime.sendMessage({
       type: 'READING_SESSION_END',
