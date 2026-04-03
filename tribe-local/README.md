@@ -73,8 +73,16 @@ To enable **real TRIBE v2 inference**:
    .venv\Scripts\hf.exe auth login
    ```
 
-4. Restart the server. It will download the TRIBE v2 checkpoint (~1 GB) on
-   first run and print `Loading TRIBE v2 model…`.
+4. (Optional, recommended for offline/local use) place your own checkpoint at:
+
+   - `FocusOS/best.ckpt` (repo root), or
+   - set `FOCUSOS_CKPT` to an explicit checkpoint path.
+
+   When present, FocusOS will try this local checkpoint **before** any remote
+   model source.
+
+5. Restart the server. If no local checkpoint is available, it will download
+   the TRIBE v2 checkpoint on first run and print `Loading TRIBE v2 model…`.
 
 Reference implementations:
 - TRIBE v2 model card: <https://huggingface.co/facebook/tribev2>
@@ -89,6 +97,13 @@ To force stub mode even when TRIBE v2 is installed:
 
 ```bat
 set FOCUSOS_STUB=1
+start_server.bat
+```
+
+To force a specific local checkpoint:
+
+```bat
+set FOCUSOS_CKPT=C:\path\to\best.ckpt
 start_server.bat
 ```
 

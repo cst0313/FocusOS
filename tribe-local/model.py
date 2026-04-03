@@ -5,18 +5,16 @@ Provides a single public function `predict_blocks(blocks)` that accepts a list
 of text-block dicts and returns per-block activation scores (lang / exec / vis).
 
 Two modes are supported:
-  1. TRIBE v2 (real)  — loads `facebook/tribev2` from Hugging Face.
-                         Requires `pip install tribev2` and a logged-in
-                         `huggingface-cli` session with access to the gated
-                         LLaMA 3.2 weights.
+  1. TRIBE v2 (real)  — prefers a local checkpoint (`best.ckpt`) when present,
+                         otherwise falls back to `facebook/tribev2`.
   2. Stub / heuristic — activated automatically when the TRIBE v2 package is
                          unavailable.  Uses lightweight text statistics
                          (sentence complexity, vocab richness, word length) to
                          produce plausible demo activations.  Clearly labelled
                          as non-model output in the API response.
 
-Set the environment variable FOCUSOS_STUB=1 to force stub mode even when
-TRIBE v2 is installed (useful for testing without a GPU).
+Set FOCUSOS_STUB=1 to force stub mode and FOCUSOS_CKPT to override checkpoint
+path discovery.
 """
 
 from __future__ import annotations
@@ -24,12 +22,16 @@ from __future__ import annotations
 import math
 import os
 import re
+import inspect
+from pathlib import Path
 from typing import Any
 
 # ── Try importing TRIBE v2 ────────────────────────────────────────────────────
 
 _TRIBE_AVAILABLE = False
 _STUB_FORCED     = os.getenv("FOCUSOS_STUB", "").strip() in ("1", "true", "yes")
+_MODEL_SOURCE    = "heuristic_stub"
+DEFAULT_CHECKPOINT_NAME = "best.ckpt"
 
 if not _STUB_FORCED:
     try:
@@ -44,16 +46,77 @@ if not _STUB_FORCED:
 _model: Any = None
 
 
+def _resolve_local_ckpt() -> Path | None:
+    """Resolve local checkpoint path if available."""
+    override = os.getenv("FOCUSOS_CKPT", "").strip()
+    if override:
+        ckpt = Path(override).expanduser().resolve()
+        return ckpt if ckpt.is_file() else None
+
+    repo_ckpt = (Path(__file__).resolve().parent.parent / DEFAULT_CHECKPOINT_NAME)
+    if repo_ckpt.is_file():
+        return repo_ckpt
+    return None
+
+
 def _load_model() -> Any:
     """Load and cache the TRIBE v2 model (first call only)."""
     global _model
+    global _MODEL_SOURCE
     if _model is None:
         import tribev2  # type: ignore
 
         print("[FocusOS] Loading TRIBE v2 model (this may take a while)…")
-        _model = tribev2.load_model("facebook/tribev2")
+        ckpt_path = _resolve_local_ckpt()
+
+        if ckpt_path is not None:
+            try:
+                _model = _load_model_from_ckpt(tribev2, ckpt_path)
+                if _model is not None:
+                    _MODEL_SOURCE = f"local_ckpt:{ckpt_path}"
+            except Exception as exc:
+                print(f"[FocusOS] Local checkpoint load failed ({exc}); falling back.")
+
+        if _model is None:
+            _model = tribev2.load_model("facebook/tribev2")
+            _MODEL_SOURCE = "huggingface:facebook/tribev2"
         print("[FocusOS] TRIBE v2 model loaded.")
     return _model
+
+
+def _load_model_from_ckpt(tribev2_module: Any, ckpt_path: Path) -> Any | None:
+    """
+    Load model from local checkpoint using load_model signature introspection.
+    Returns None when no compatible local-checkpoint parameter is found.
+    """
+    load_model = tribev2_module.load_model
+    sig = inspect.signature(load_model)
+    params = sig.parameters
+
+    candidate_keys = (
+        "checkpoint_path",
+        "ckpt_path",
+        "checkpoint",
+        "model_path",
+        "path",
+    )
+    for key in candidate_keys:
+        if key in params:
+            return load_model(**{key: str(ckpt_path)})
+
+    accepts_kwargs = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+    if accepts_kwargs:
+        return load_model(checkpoint_path=str(ckpt_path))
+
+    # Last fallback for signatures that accept a single positional model source.
+    if params:
+        first = next(iter(params.values()))
+        if first.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+            return load_model(str(ckpt_path))
+
+    return None
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -202,8 +265,12 @@ def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
 # ── Status helpers ────────────────────────────────────────────────────────────
 
 def model_status() -> dict:
+    mode = "tribe_v2" if (_TRIBE_AVAILABLE and not _STUB_FORCED) else "heuristic_stub"
+    source = _MODEL_SOURCE if mode == "tribe_v2" else "heuristic_stub"
     return {
         "tribe_available": _TRIBE_AVAILABLE,
         "stub_forced":     _STUB_FORCED,
-        "mode":            "tribe_v2" if (_TRIBE_AVAILABLE and not _STUB_FORCED) else "heuristic_stub",
+        "mode":            mode,
+        "model_source":    source,
+        "local_ckpt_found": _resolve_local_ckpt() is not None,
     }
