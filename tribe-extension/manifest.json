@@ -8,10 +8,12 @@
     "tabs",
     "scripting",
     "activeTab",
-    "sidePanel"
+    "sidePanel",
+    "webNavigation"
   ],
   "host_permissions": [
     "http://localhost:8787/*",
+    "http://127.0.0.1:8787/*",
     "<all_urls>"
   ],
   "background": {

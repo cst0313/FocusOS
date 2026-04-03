@@ -54,6 +54,7 @@
         <span id="budget-minutes" class="budget-minutes">0.0 / 100 focus-min</span>
         <button id="reset-budget-btn" class="link-btn" title="Reset today's budget">Reset</button>
       </div>
+      <p class="budget-focus-hint" id="budget-focus-hint"></p>
     </section>
 
     <!-- ── Focus Session ──────────────────── -->
@@ -104,6 +105,47 @@
     <section class="card strategy-card" aria-labelledby="strategy-label">
       <span id="strategy-label" class="card-label">Reading Strategy</span>
       <p id="strategy-text" class="strategy-text">—</p>
+    </section>
+
+    <!-- ── Settings ───────────────────────── -->
+    <section class="card settings-card" aria-labelledby="settings-label">
+      <span id="settings-label" class="card-label">Settings</span>
+      <div class="settings-row">
+        <label for="threshold-slider" class="settings-field-label">
+          Break after
+          <strong><span id="threshold-value">20</span> focus-minutes</strong>
+        </label>
+        <input
+          type="range"
+          id="threshold-slider"
+          min="10"
+          max="60"
+          step="5"
+          value="20"
+          aria-label="Break suggestion threshold in focus-minutes"
+          aria-valuemin="10"
+          aria-valuemax="60"
+        />
+        <div class="settings-range-labels" aria-hidden="true">
+          <span>10 min</span>
+          <span>60 min</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Activity Timeline ──────────────── -->
+    <section class="card activity-card" aria-labelledby="activity-label">
+      <span id="activity-label" class="card-label">Activity</span>
+      <a
+        id="open-dashboard"
+        href="http://127.0.0.1:8787/dashboard"
+        class="dashboard-link"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Open activity timeline in a new tab"
+      >
+        📊 View today's brain activity timeline →
+      </a>
     </section>
 
     <!-- ── Footer ─────────────────────────── -->
