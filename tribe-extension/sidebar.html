@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FocusOS</title>
+  <link rel="stylesheet" href="sidebar.css" />
+</head>
+<body>
+  <div class="sidebar">
+
+    <!-- ── Header ─────────────────────────── -->
+    <header class="sidebar-header">
+      <div class="brand">
+        <span class="brand-icon" aria-hidden="true">🧠</span>
+        <span class="brand-name">FocusOS</span>
+      </div>
+      <p class="brand-tagline">Cognitive Load · Brain Budget</p>
+    </header>
+
+    <!-- ── Tracking Toggle ────────────────── -->
+    <section class="card tracking-card" aria-labelledby="tracking-label">
+      <div class="tracking-row">
+        <div>
+          <span id="tracking-label" class="card-label">Tracking</span>
+          <span id="tracking-status-text" class="tracking-status off">OFF</span>
+        </div>
+        <button
+          id="tracking-toggle"
+          class="toggle-btn"
+          role="switch"
+          aria-checked="false"
+          aria-label="Toggle cognitive load tracking"
+          title="Toggle tracking"
+        >
+          <span class="toggle-thumb"></span>
+        </button>
+      </div>
+      <p class="tracking-hint" id="tracking-hint">
+        Turn tracking on to analyze this page.
+      </p>
+    </section>
+
+    <!-- ── Daily Brain Budget ─────────────── -->
+    <section class="card budget-card" aria-labelledby="budget-label">
+      <span id="budget-label" class="card-label">Daily Brain Budget</span>
+      <div class="budget-bar-wrap" role="progressbar"
+           aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"
+           aria-labelledby="budget-label">
+        <div class="budget-bar" id="budget-bar"></div>
+      </div>
+      <div class="budget-meta">
+        <span id="budget-percent" class="budget-pct">0%</span>
+        <button id="reset-budget-btn" class="link-btn" title="Reset today's budget">Reset</button>
+      </div>
+    </section>
+
+    <!-- ── Current Page Score ─────────────── -->
+    <section class="card page-card" aria-labelledby="page-label">
+      <span id="page-label" class="card-label">This Page</span>
+      <div class="page-score-row">
+        <span id="page-score-badge" class="score-badge neutral">—</span>
+        <span id="page-score-number" class="score-number">—</span>
+      </div>
+      <p id="page-summary" class="page-summary">Analyse a page to see its cognitive load.</p>
+    </section>
+
+    <!-- ── Top High-Load Blocks ───────────── -->
+    <section class="card blocks-card" aria-labelledby="blocks-label">
+      <span id="blocks-label" class="card-label">Top High-Load Sections</span>
+      <ul id="top-blocks-list" class="block-list" aria-live="polite">
+        <li class="block-list-empty">No data yet.</li>
+      </ul>
+    </section>
+
+    <!-- ── Reading Strategy ───────────────── -->
+    <section class="card strategy-card" aria-labelledby="strategy-label">
+      <span id="strategy-label" class="card-label">Reading Strategy</span>
+      <p id="strategy-text" class="strategy-text">—</p>
+    </section>
+
+    <!-- ── Footer ─────────────────────────── -->
+    <footer class="sidebar-footer">
+      <p>
+        Predictions by
+        <a href="https://huggingface.co/facebook/tribev2" target="_blank" rel="noopener">
+          TRIBE&nbsp;v2
+        </a>
+        · average-subject fMRI model<br />
+        <span class="footer-notice">Not a medical tool. Local inference only.</span>
+      </p>
+    </footer>
+
+  </div>
+
+  <script src="sidebar.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+/* =========================================================
+   FocusOS – Heatmap Overlay Styles
+   Applied by content.js to page elements based on their
+   predicted cognitive load score from TRIBE v2.
+   ========================================================= */
+
+/* Base overlay wrapper – subtly marks each scored block */
+.focusos-overlay {
+  position: relative;
+  border-radius: 3px;
+  transition: background-color 0.35s ease, border-left-color 0.35s ease;
+}
+
+/* ── Low cognitive load: calm green ── */
+.focusos-load-low {
+  background-color: rgba(34, 197, 94, 0.12) !important;
+  border-left: 3px solid rgba(34, 197, 94, 0.55) !important;
+  padding-left: 10px !important;
+}
+
+/* ── Medium cognitive load: warm amber ── */
+.focusos-load-medium {
+  background-color: rgba(234, 179, 8, 0.14) !important;
+  border-left: 3px solid rgba(234, 179, 8, 0.60) !important;
+  padding-left: 10px !important;
+}
+
+/* ── High cognitive load: alert red ── */
+.focusos-load-high {
+  background-color: rgba(239, 68, 68, 0.14) !important;
+  border-left: 3px solid rgba(239, 68, 68, 0.60) !important;
+  padding-left: 10px !important;
+}

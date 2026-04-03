@@ -1,0 +1,14 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.6.0
+
+# Optional – required only for real TRIBE v2 inference.
+# Install separately after accepting the model licence:
+#   pip install tribev2
+#   huggingface-cli login
+# tribev2
+
+# Optional – required by the TRIBE v2 inference path:
+# numpy>=1.26.0
+# pandas>=2.0.0
+# torch>=2.2.0  # GPU recommended (NVIDIA CUDA 12.x on Windows)
