@@ -99,7 +99,6 @@ def _load_model_from_ckpt(tribev2_module: Any, ckpt_path: Path) -> Any | None:
         "checkpoint",
         "model_path",
         "path",
-        "pretrained_model_name_or_path",
     )
     for key in candidate_keys:
         if key in params:

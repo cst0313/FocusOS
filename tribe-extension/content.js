@@ -58,7 +58,7 @@ const MIN_REPORT_SECONDS = 5;
     const overlapStart = Math.max(periodStartMs, engagementStartMs);
     const overlapEnd = Math.min(now, engagementEndMs);
     const engagementMs = Math.max(0, overlapEnd - overlapStart);
-    return Math.round(Math.max(0, engagementMs) / 1000);
+    return Math.round(engagementMs / 1000);
   }
 
   function startTimer() {
