@@ -31,6 +31,7 @@ from typing import Any
 _TRIBE_AVAILABLE = False
 _STUB_FORCED     = os.getenv("FOCUSOS_STUB", "").strip() in ("1", "true", "yes")
 _MODEL_SOURCE    = "heuristic_stub"
+DEFAULT_CHECKPOINT_NAME = "best.ckpt"
 
 if not _STUB_FORCED:
     try:
@@ -52,7 +53,7 @@ def _resolve_local_ckpt() -> Path | None:
         ckpt = Path(override).expanduser().resolve()
         return ckpt if ckpt.is_file() else None
 
-    repo_ckpt = (Path(__file__).resolve().parent.parent / "best.ckpt")
+    repo_ckpt = (Path(__file__).resolve().parent.parent / DEFAULT_CHECKPOINT_NAME)
     if repo_ckpt.is_file():
         return repo_ckpt
     return None

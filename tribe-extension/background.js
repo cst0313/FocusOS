@@ -294,9 +294,7 @@ async function handleReadingTimeUpdate(seconds, engagedSeconds, tabId) {
   // ── Time-weighted budget ──
   const tabScores = stored.pageScoresByTab ?? {};
   const tabKey = tabId !== null ? String(tabId) : null;
-  const pageScore = (tabKey && typeof tabScores[tabKey] === 'number')
-    ? tabScores[tabKey]
-    : (stored.lastPageScore ?? 0);
+  const pageScore = getPageScoreForTab(tabKey, tabScores, stored.lastPageScore ?? 0);
   const baseBudget = stored.budgetDate === today ? (stored.dailyBudget ?? 0) : 0;
   const contribution = pageScore * (engaged / 60) / 100;
   const nextBudget = Math.min(baseBudget + contribution, BUDGET_CEILING * BUDGET_OVERLOAD_MULTIPLIER);
@@ -430,4 +428,11 @@ function scoreLabel(score) {
   if (score < 30) return 'low';
   if (score < 60) return 'good';
   return 'high';
+}
+
+function getPageScoreForTab(tabKey, tabScores, fallbackScore) {
+  if (tabKey && typeof tabScores[tabKey] === 'number') {
+    return tabScores[tabKey];
+  }
+  return fallbackScore;
 }

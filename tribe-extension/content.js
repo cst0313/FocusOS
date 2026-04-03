@@ -40,6 +40,8 @@ const MIN_REPORT_SECONDS = 5;
   let reportTimer    = null;
   let interactionAt  = Date.now();
 
+  // Treat reading as engaged for 45s after user interaction; this avoids
+  // counting long idle stretches (open tab, no activity) as focus time.
   const INTERACTION_ENGAGEMENT_WINDOW_MS = 45_000;
   const MAX_REPORT_SECONDS = 90;
 
@@ -65,13 +67,17 @@ const MIN_REPORT_SECONDS = 5;
     reportTimer  = setInterval(reportTime, REPORT_INTERVAL_MS);
   }
 
+  function elapsedSecondsSinceSegmentStart() {
+    return Math.min(Math.round((Date.now() - segmentStart) / 1000), MAX_REPORT_SECONDS);
+  }
+
   function stopTimer() {
     if (reportTimer) {
       clearInterval(reportTimer);
       reportTimer = null;
     }
     // Report any remaining seconds before stopping.
-    const elapsed = Math.min(Math.round((Date.now() - segmentStart) / 1000), MAX_REPORT_SECONDS);
+    const elapsed = elapsedSecondsSinceSegmentStart();
     if (elapsed >= MIN_REPORT_SECONDS) {
       const engaged = engagedSecondsWithin(elapsed);
       if (engaged >= MIN_REPORT_SECONDS) {
@@ -86,7 +92,7 @@ const MIN_REPORT_SECONDS = 5;
   }
 
   function reportTime() {
-    const elapsed = Math.min(Math.round((Date.now() - segmentStart) / 1000), MAX_REPORT_SECONDS);
+    const elapsed = elapsedSecondsSinceSegmentStart();
     segmentStart  = Date.now();
     if (elapsed > 0) {
       const engaged = engagedSecondsWithin(elapsed);
