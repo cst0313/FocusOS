@@ -5,7 +5,8 @@
 
 All inference is **private and local** – no data is sent to the cloud.  
 Powered by [TRIBE v2](https://huggingface.co/facebook/tribev2) (Facebook AI,
-CC-BY-NC 4.0), or a lightweight heuristic stub when the model is not installed.
+CC-BY-NC 4.0), preferring a local `best.ckpt` when available, or a lightweight
+heuristic stub when the model is not installed.
 
 ---
 
@@ -15,7 +16,7 @@ CC-BY-NC 4.0), or a lightweight heuristic stub when the model is not installed.
 |---|---|
 | **On-page heatmap** | Block-level green / amber / red overlay based on predicted neural activation |
 | **Tracking toggle** | Default **OFF**; flip ON in the sidebar to start analysis |
-| **Daily brain budget** | Cumulative cognitive cost across a session (0–200 %) |
+| **Daily brain budget** | Cumulative cognitive cost from engaged reading time (0–200 %) |
 | **Page score** | `low` / `good` / `high` demand rating for the current page |
 | **Top high-load blocks** | Ranked list of the five most demanding sections |
 | **Reading strategy** | Time-of-day recommendation based on page score |
