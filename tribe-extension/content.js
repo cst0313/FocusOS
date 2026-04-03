@@ -96,6 +96,10 @@ const MIN_REPORT_SECONDS = 5;
 
       case 'APPLY_SCORES':
         applyHeatmap(msg.blocks);
+        // Update local page score so reading-time tracking uses the right value.
+        if (msg.pageScore != null) {
+          currentPageScore = msg.pageScore;
+        }
         sendResponse({ ok: true });
         break;
 

@@ -145,12 +145,14 @@ async function analyzePage({ url, blocks }, tabId) {
     return { error: err.message };
   }
 
-  // 1. Push scored overlay to the content script of the originating tab.
+  // 1. Push scored overlay AND page score to the content script so it can
+  //    attribute reading time to the correct load level.
   if (tabId !== null) {
     try {
       await chrome.tabs.sendMessage(tabId, {
         type: 'APPLY_SCORES',
         blocks: data.blocks,
+        pageScore: data.page_score ?? 0,
       });
     } catch (_) {
       // Content script may not be ready yet – not fatal.
@@ -171,12 +173,57 @@ async function analyzePage({ url, blocks }, tabId) {
     },
   });
 
-  // 4. Ping the sidebar (may not be open – ignore failure).
+  // 3. Ping the sidebar (may not be open – ignore failure).
   try {
     chrome.runtime.sendMessage({ type: 'PAGE_ANALYZED', data });
   } catch (_) { /* sidebar closed */ }
 
   return { ok: true, data };
+}
+
+/** Send GET_PAGE_TEXT to a tab and run analysis if blocks are available. */
+async function triggerAnalysisOnTab(tabId) {
+  try {
+    const textResult = await chrome.tabs.sendMessage(tabId, { type: 'GET_PAGE_TEXT' });
+    if (textResult?.blocks?.length > 0) {
+      const tab = await chrome.tabs.get(tabId);
+      await analyzePage({ url: tab.url, blocks: textResult.blocks }, tabId);
+    }
+  } catch (_) { /* content script not ready or tab unavailable */ }
+}
+
+// ─── Reading session end ──────────────────────────────────────────────────────
+
+/**
+ * Called when the content script reports the tab becoming hidden or the page
+ * unloading. Computes focus-minutes = (pageScore / 100) × elapsedMinutes and
+ * accumulates into the daily budget and consecutive-session counter.
+ */
+async function handleReadingSessionEnd({ elapsedSeconds, pageScore, url }, senderTabId) {
+  const elapsedMinutes = Math.min((elapsedSeconds ?? 0) / 60, MAX_SESSION_MINUTES);
+  if (elapsedMinutes < 0.1 || !pageScore || pageScore <= 0) return;
+
+  // focus-minutes = normalised load × time, capped per page
+  const focusContribution = Math.min(
+    (pageScore / 100) * elapsedMinutes,
+    MAX_PAGE_FOCUS_MINUTES
+  );
+  if (focusContribution < 0.01) return;
+
+  await accumulateBudget(focusContribution);
+
+  // Forward session data to the local server for the dashboard timeline.
+  logSessionToServer({
+    url,
+    page_score: pageScore,
+    elapsed_minutes: elapsedMinutes,
+    focus_contribution: focusContribution,
+  }).catch(() => { /* server may be offline */ });
+
+  // Show break popup on whichever tab is currently active.
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const targetTabId = activeTab?.id ?? senderTabId;
+  await checkBreakSuggestion(focusContribution, targetTabId);
 }
 
 // ─── Tracking state ──────────────────────────────────────────────────────────
@@ -186,10 +233,11 @@ async function setTracking(enabled, activeTabId) {
 
   // Broadcast new state to every tab that has the content script loaded.
   const tabs = await chrome.tabs.query({});
-  const broadcasts = tabs.map((tab) =>
-    chrome.tabs.sendMessage(tab.id, { type: 'TRACKING_STATE', enabled }).catch(() => {})
+  await Promise.allSettled(
+    tabs.map((tab) =>
+      chrome.tabs.sendMessage(tab.id, { type: 'TRACKING_STATE', enabled }).catch(() => {})
+    )
   );
-  await Promise.allSettled(broadcasts);
 
   // When turning tracking ON, kick off analysis on the active tab right away.
   if (enabled && activeTabId !== null) {
@@ -317,7 +365,7 @@ async function getState() {
   const today = new Date().toDateString();
   const stored = await chrome.storage.local.get([
     'trackingEnabled',
-    'dailyBudget',
+    'dailyFocusMinutes',
     'budgetDate',
     'lastPageResult',
     'focusSecondsSinceBreak',

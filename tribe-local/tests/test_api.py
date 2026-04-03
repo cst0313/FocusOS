@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 from httpx import AsyncClient, ASGITransport
+from datetime import datetime, timezone
 
 # Reload modules so the env-var override takes effect.
 import importlib

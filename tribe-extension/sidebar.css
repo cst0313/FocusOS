@@ -177,7 +177,7 @@ html, body {
   left: calc(var(--toggle-w) - var(--thumb-size) - 3px);
 }
 
-/* ── Brain budget ──────────────────────────────────────────── */
+/* ── Budget (updated for focus-minutes) ────────────────────── */
 .budget-bar-wrap {
   height: 8px;
   background: rgba(255, 255, 255, 0.07);
@@ -198,6 +198,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
 }
 
 .budget-pct {
@@ -205,6 +206,127 @@ html, body {
   font-weight: 700;
   color: var(--text-primary);
   letter-spacing: -0.5px;
+}
+
+.budget-minutes {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: 1;
+}
+
+/* ── Focus Session card ────────────────────────────────────── */
+.session-card {}
+
+.session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.session-minutes-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.session-minutes {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.5px;
+}
+
+.session-unit {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.session-bar-wrap {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.session-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 3px;
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.3s ease;
+  background: var(--accent-green);
+}
+
+.session-bar.low    { background: var(--accent-green); }
+.session-bar.medium { background: var(--accent-amber); }
+.session-bar.high   { background: var(--accent-red); }
+
+/* ── Break threshold slider ────────────────────────────────── */
+.threshold-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.threshold-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.threshold-slider {
+  flex: 1;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.threshold-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  cursor: pointer;
+  transition: background var(--transition), transform 0.15s ease;
+}
+
+.threshold-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+.threshold-slider:focus-visible {
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.4);
+  border-radius: 2px;
+}
+
+.threshold-value {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  min-width: 34px;
+  text-align: right;
+}
+
+/* ── Dashboard link ────────────────────────────────────────── */
+.dashboard-link {
+  color: var(--accent-blue);
+  text-decoration: none;
+  font-size: 11px;
+  transition: color var(--transition);
+}
+
+.dashboard-link:hover {
+  color: var(--text-primary);
+  text-decoration: underline dotted;
 }
 
 /* ── Page score ────────────────────────────────────────────── */
