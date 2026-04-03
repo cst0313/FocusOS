@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+
+# pytest
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Node / JS (if added later)
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Extension build artefacts (if added later)
+tribe-extension/dist/
+
+# Preview images generated during development
+sidebar_preview.png
