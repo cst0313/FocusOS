@@ -8,10 +8,8 @@
  *     overlay accordingly.
  *  3. Apply per-block color overlays (green / yellow / red) when the
  *     background script returns scored blocks.
- *  4. Track active reading time using document.visibilityState, report elapsed
- *     seconds to the background when the page becomes hidden or unloads.
- *  5. Display a non-jarring brain-break toast popup when requested by the
- *     background script.
+ *  4. Track active reading time and report to the background every 30 s.
+ *  5. Show / hide the brain-break popup when instructed by the background.
  *
  * All processing is local – no data leaves the machine.
  */
@@ -22,8 +20,11 @@ const MIN_BLOCK_LENGTH = 20;
 /** Maximum characters sent per block to keep API payloads reasonable. */
 const MAX_BLOCK_TEXT_LENGTH = 600;
 
-/** Minimum elapsed seconds before a reading session is reported to background. */
-const MIN_SESSION_SECONDS = 6;
+/** How often (ms) to report reading time to the background service worker. */
+const REPORT_INTERVAL_MS = 30_000;
+
+/** Minimum elapsed seconds required before sending a time report on stop. */
+const MIN_REPORT_SECONDS = 5;
 
 (function () {
   'use strict';
@@ -31,59 +32,65 @@ const MIN_SESSION_SECONDS = 6;
   /** IDs of elements that currently carry an overlay class */
   let overlayElements = [];
 
-  /**
-   * The page-level cognitive load score (0–100) last reported by the
-   * background script. Used to weight reading-time contributions.
-   */
-  let currentPageScore = 0;
+  // ─── Reading-time tracking ────────────────────────────────────────────────
 
-  /**
-   * Timestamp (ms) when active reading started on this page.
-   * null when the page is hidden / user is on another tab.
-   */
-  let readingStartTime = document.visibilityState === 'visible' ? Date.now() : null;
+  let trackingActive = false;
+  let pageVisible    = !document.hidden;
+  let segmentStart   = Date.now();   // start of the current visible segment
+  let reportTimer    = null;
 
-  // ─── Reading Time Tracking ─────────────────────────────────────────────────
+  function startTimer() {
+    if (reportTimer) return;
+    segmentStart = Date.now();
+    reportTimer  = setInterval(reportTime, REPORT_INTERVAL_MS);
+  }
+
+  function stopTimer() {
+    if (reportTimer) {
+      clearInterval(reportTimer);
+      reportTimer = null;
+    }
+    // Report any remaining seconds before stopping.
+    const elapsed = Math.round((Date.now() - segmentStart) / 1000);
+    if (elapsed >= MIN_REPORT_SECONDS) {
+      chrome.runtime.sendMessage({ type: 'READING_TIME_UPDATE', seconds: elapsed });
+    }
+    segmentStart = Date.now();
+  }
+
+  function reportTime() {
+    const elapsed = Math.round((Date.now() - segmentStart) / 1000);
+    segmentStart  = Date.now();
+    if (elapsed > 0) {
+      chrome.runtime.sendMessage({ type: 'READING_TIME_UPDATE', seconds: elapsed });
+    }
+  }
+
+  function updateTimerState() {
+    if (trackingActive && pageVisible) {
+      startTimer();
+    } else {
+      stopTimer();
+    }
+  }
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      // Page became active – (re)start the reading timer.
-      readingStartTime = Date.now();
-    } else {
-      // Page became hidden – report elapsed reading time to the background.
-      sendReadingSessionEnd();
-    }
+    pageVisible = !document.hidden;
+    updateTimerState();
   });
-
-  window.addEventListener('beforeunload', () => {
-    sendReadingSessionEnd();
-  });
-
-  function sendReadingSessionEnd() {
-    if (readingStartTime === null) return;
-    const elapsedSeconds = (Date.now() - readingStartTime) / 1000;
-    readingStartTime = null; // prevent double-reporting
-
-    if (elapsedSeconds < MIN_SESSION_SECONDS) return; // ignore very brief visits
-
-    chrome.runtime.sendMessage({
-      type: 'READING_SESSION_END',
-      elapsedSeconds,
-      pageScore: currentPageScore,
-      url: window.location.href,
-    }).catch(() => { /* service worker may be inactive */ });
-  }
 
   // ─── Messaging ────────────────────────────────────────────────────────────
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     switch (msg.type) {
       case 'TRACKING_STATE':
+        trackingActive = msg.enabled;
         if (msg.enabled) {
           runAnalysis();
         } else {
           clearOverlay();
         }
+        updateTimerState();
         sendResponse({ ok: true });
         break;
 
@@ -119,18 +126,22 @@ const MIN_SESSION_SECONDS = 6;
   // ─── Bootstrap ────────────────────────────────────────────────────────────
 
   chrome.storage.local.get(['trackingEnabled'], (result) => {
-    if (result.trackingEnabled === true) {
+    trackingActive = result.trackingEnabled === true;
+    if (trackingActive) {
       runAnalysis();
+      updateTimerState();
     }
   });
 
   chrome.storage.onChanged.addListener((changes) => {
     if ('trackingEnabled' in changes) {
-      if (changes.trackingEnabled.newValue === true) {
+      trackingActive = changes.trackingEnabled.newValue === true;
+      if (trackingActive) {
         runAnalysis();
       } else {
         clearOverlay();
       }
+      updateTimerState();
     }
   });
 
@@ -283,37 +294,38 @@ const MIN_SESSION_SECONDS = 6;
 
   // ─── Brain Break Popup ────────────────────────────────────────────────────
 
-  /**
-   * Display a subtle, auto-dismissing toast popup recommending a brain break.
-   * The popup auto-dismisses after 6 seconds or on the user's click.
-   */
   function showBreakPopup() {
-    // Remove any existing popup to prevent duplicates.
-    const existing = document.getElementById('focusos-break-popup');
-    if (existing) existing.remove();
+    hideBreakPopup(); // remove any existing popup first
 
     const popup = document.createElement('div');
     popup.id = 'focusos-break-popup';
-    popup.setAttribute('role', 'status');
-    popup.setAttribute('aria-live', 'polite');
-    popup.innerHTML =
-      '<span class="focusos-break-icon" aria-hidden="true">\uD83E\uDDE0</span>' +
-      '<span class="focusos-break-msg">Time for a quick brain break! Consider a short walk or rest before your next read.</span>' +
-      '<button class="focusos-break-dismiss" aria-label="Dismiss brain break reminder">\u2715</button>';
+    popup.setAttribute('role', 'alert');
+    popup.setAttribute('aria-live', 'assertive');
+
+    popup.innerHTML = `
+      <div class="focusos-break-inner">
+        <span class="focusos-break-icon" aria-hidden="true">🧠</span>
+        <div class="focusos-break-body">
+          <strong class="focusos-break-title">Time for a brain break!</strong>
+          <p class="focusos-break-msg">Consider a short rest before your next deep read.</p>
+        </div>
+        <button class="focusos-break-dismiss" aria-label="Dismiss break reminder" title="Dismiss">✕</button>
+      </div>
+    `;
 
     document.body.appendChild(popup);
 
-    // Trigger CSS enter animation on the next paint.
-    requestAnimationFrame(() => popup.classList.add('focusos-break-popup-visible'));
+    popup.querySelector('.focusos-break-dismiss').addEventListener('click', () => {
+      hideBreakPopup();
+      chrome.runtime.sendMessage({ type: 'BREAK_DISMISSED' });
+    });
 
-    const dismiss = () => {
-      popup.classList.remove('focusos-break-popup-visible');
-      setTimeout(() => { if (popup.parentNode) popup.remove(); }, 400);
-    };
+    // Auto-dismiss after 8 seconds.
+    setTimeout(() => hideBreakPopup(), 8000);
+  }
 
-    popup.querySelector('.focusos-break-dismiss').addEventListener('click', dismiss);
-
-    // Auto-dismiss after 6 seconds.
-    setTimeout(dismiss, 6000);
+  function hideBreakPopup() {
+    const existing = document.getElementById('focusos-break-popup');
+    if (existing) existing.remove();
   }
 })();

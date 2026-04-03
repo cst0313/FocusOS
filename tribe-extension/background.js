@@ -5,35 +5,37 @@
  *  • Open the side panel when the toolbar icon is clicked.
  *  • Relay ANALYZE_PAGE requests from content scripts to the local
  *    Python/FastAPI inference server (http://localhost:8787/predict).
- *  • Propagate scored blocks back to the originating tab's content script,
- *    including the page score so the content script can track reading time.
- *  • Re-trigger analysis on every tab switch and whenever a new link loads.
- *  • Accumulate brain budget using time-based formula: score × reading_minutes.
- *  • Send break-suggestion popups when consecutive focus-minutes pass threshold.
- *  • Serve GET_STATE / SET_TRACKING / RESET_BUDGET / SET_BREAK_THRESHOLD /
- *    RESET_CONSECUTIVE / READING_SESSION_END messages.
+ *  • Propagate scored blocks back to the originating tab's content script.
+ *  • Maintain daily brain-budget state in chrome.storage.local.
+ *  • Serve GET_STATE / SET_TRACKING / RESET_BUDGET / GET_SETTINGS /
+ *    SET_SETTINGS / READING_TIME_UPDATE / BREAK_DISMISSED messages.
+ *  • Re-trigger analysis on tab switches and navigation events.
  */
 
-const API_URL = 'http://localhost:8787/predict';
-const LOG_URL = 'http://localhost:8787/log_session';
+const API_URL      = 'http://localhost:8787/predict';
+const SESSION_URL  = 'http://127.0.0.1:8787/session';
 
-/** Daily budget ceiling in focus-minutes (~100 focus-minutes models 9am–8pm). */
+/**
+ * Daily budget ceiling in weighted focus-minutes.
+ * Weighted focus-minutes = actual_minutes × (page_score / 100).
+ * At ceiling 100, you'd need 100 minutes of 100-score content to fill it.
+ */
 const BUDGET_CEILING = 100;
 
-/** Cap any single reading session at 60 minutes to avoid inflating idle tabs. */
-const MAX_SESSION_MINUTES = 60;
+/**
+ * Allow accumulation up to 2× the ceiling so the bar can show "overload"
+ * without capping the true value; percentages above 100 signal excess.
+ */
+const BUDGET_OVERLOAD_MULTIPLIER = 2;
 
-/** Cap per-page focus-minute contribution to prevent extreme outliers. */
-const MAX_PAGE_FOCUS_MINUTES = 15;
-
-/** Default break threshold in consecutive focus-minutes. */
+/** Default break-suggestion threshold (focus-minutes of active reading). */
 const DEFAULT_BREAK_THRESHOLD = 20;
 
 /**
- * If the gap between sessions exceeds this many minutes, reset the
- * consecutive focus-minute counter (user naturally took a break).
+ * Delay (ms) before requesting page text after a navigation event.
+ * Content scripts need a short window to initialise after the DOM is ready.
  */
-const BREAK_GAP_MINUTES = 30;
+const CONTENT_SCRIPT_INIT_DELAY_MS = 800;
 
 // ─── Side panel ──────────────────────────────────────────────────────────────
 
@@ -41,27 +43,34 @@ chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ tabId: tab.id });
 });
 
-// ─── Tab switch: re-analyse when the user makes a tab active ─────────────────
+// ─── Tab switch re-analysis ───────────────────────────────────────────────────
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
-  const { trackingEnabled } = await chrome.storage.local.get('trackingEnabled');
-  if (!trackingEnabled) return;
-  // Small delay so the content script is ready (tab may still be restoring).
-  setTimeout(() => triggerAnalysisOnTab(tabId), 300);
-});
-
-// ─── URL change: re-analyse when a new link is opened in the active tab ──────
-
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (changeInfo.status !== 'complete') return;
-  if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) return;
-  if (!tab.active) return;
-
-  const { trackingEnabled } = await chrome.storage.local.get('trackingEnabled');
-  if (!trackingEnabled) return;
-
+  const stored = await chrome.storage.local.get(['trackingEnabled']);
+  if (!stored.trackingEnabled) return;
   triggerAnalysisOnTab(tabId);
 });
+
+// ─── Navigation re-analysis ──────────────────────────────────────────────────
+
+chrome.webNavigation.onCompleted.addListener(async ({ tabId, frameId }) => {
+  if (frameId !== 0) return; // main frame only
+  const stored = await chrome.storage.local.get(['trackingEnabled']);
+  if (!stored.trackingEnabled) return;
+  // Small delay to let the content script initialise after navigation.
+  setTimeout(() => triggerAnalysisOnTab(tabId), CONTENT_SCRIPT_INIT_DELAY_MS);
+});
+
+/** Ask a tab's content script for its text blocks and run analysis. */
+async function triggerAnalysisOnTab(tabId) {
+  try {
+    const textResult = await chrome.tabs.sendMessage(tabId, { type: 'GET_PAGE_TEXT' });
+    if (textResult?.blocks?.length > 0) {
+      const tab = await chrome.tabs.get(tabId);
+      await analyzePage({ url: tab.url, blocks: textResult.blocks }, tabId);
+    }
+  } catch (_) { /* content script not ready – ignore */ }
+}
 
 // ─── Message router ──────────────────────────────────────────────────────────
 
@@ -71,7 +80,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   switch (msg.type) {
     case 'ANALYZE_PAGE':
       analyzePage(msg, tabId).then(sendResponse);
-      return true; // keep channel open for async reply
+      return true;
 
     case 'GET_STATE':
       getState().then(sendResponse);
@@ -85,20 +94,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       resetBudget().then(() => sendResponse({ ok: true }));
       return true;
 
-    case 'READING_SESSION_END':
-      handleReadingSessionEnd(msg, tabId).then(() => sendResponse({ ok: true }));
+    case 'GET_SETTINGS':
+      getSettings().then(sendResponse);
       return true;
 
-    case 'SET_BREAK_THRESHOLD':
-      chrome.storage.local.set({ breakThreshold: msg.threshold })
-        .then(() => sendResponse({ ok: true }));
+    case 'SET_SETTINGS':
+      saveSettings(msg.settings).then(() => sendResponse({ ok: true }));
       return true;
 
-    case 'RESET_CONSECUTIVE':
-      chrome.storage.local.set({
-        consecutiveFocusMinutes: 0,
-        lastSessionEndTime: Date.now(),
-      }).then(() => sendResponse({ ok: true }));
+    case 'READING_TIME_UPDATE':
+      handleReadingTimeUpdate(msg.seconds, tabId).then(() => sendResponse({ ok: true }));
+      return true;
+
+    case 'BREAK_DISMISSED':
+      resetBreakTimer().then(() => sendResponse({ ok: true }));
       return true;
   }
 });
@@ -106,11 +115,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // ─── Core: page analysis ─────────────────────────────────────────────────────
 
 /**
- * POST the extracted blocks to the local inference server and handle the
- * response (overlay, sidebar notification).
- *
- * NOTE: budget is no longer accumulated here – it is accumulated when the
- * content script reports how long the user actually read the page.
+ * POST extracted blocks to the local inference server and handle the
+ * response (overlay, budget update, sidebar notification, session recording).
  */
 async function analyzePage({ url, blocks }, tabId) {
   if (!blocks || blocks.length === 0) {
@@ -153,11 +159,15 @@ async function analyzePage({ url, blocks }, tabId) {
     }
   }
 
-  // 2. Persist the latest page result for the sidebar.
+  // 2. Store the latest page score so time-based budget accumulation can use it.
+  const pageScore = data.page_score ?? 0;
+  await chrome.storage.local.set({ lastPageScore: pageScore });
+
+  // 3. Persist the latest page result for the sidebar.
   await chrome.storage.local.set({
     lastPageResult: {
       url,
-      score: data.page_score ?? 0,
+      score: pageScore,
       blocks: data.blocks ?? [],
       timestamp: Date.now(),
     },
@@ -218,10 +228,6 @@ async function handleReadingSessionEnd({ elapsedSeconds, pageScore, url }, sende
 
 // ─── Tracking state ──────────────────────────────────────────────────────────
 
-/**
- * Persist the tracking preference and broadcast it to all eligible tabs.
- * When enabling, immediately trigger analysis on the currently active tab.
- */
 async function setTracking(enabled, activeTabId) {
   await chrome.storage.local.set({ trackingEnabled: enabled });
 
@@ -235,83 +241,122 @@ async function setTracking(enabled, activeTabId) {
 
   // When turning tracking ON, kick off analysis on the active tab right away.
   if (enabled && activeTabId !== null) {
-    await triggerAnalysisOnTab(activeTabId);
+    triggerAnalysisOnTab(activeTabId);
   }
+}
+
+// ─── Reading-time budget ──────────────────────────────────────────────────────
+
+/**
+ * Called every ~30 s by the content script while the user is actively reading.
+ * Accumulates time-weighted brain budget and checks the break threshold.
+ *
+ * Budget contribution = page_score × (seconds / 60) / 100
+ *   → fills the 100-point daily ceiling proportional to both load and time.
+ *
+ * Break threshold is measured in raw focus-minutes (unweighted), so the
+ * break suggestion depends only on how long the user has been reading,
+ * not on the cognitive weight of each page.
+ */
+async function handleReadingTimeUpdate(seconds, tabId) {
+  if (!seconds || seconds <= 0) return;
+
+  const today = new Date().toDateString();
+  const stored = await chrome.storage.local.get([
+    'dailyBudget',
+    'budgetDate',
+    'lastPageScore',
+    'focusSecondsSinceBreak',
+    'breakThreshold',
+    'lastSessionSeconds',
+    'lastSessionUrl',
+    'lastPageResult',
+  ]);
+
+  // ── Time-weighted budget ──
+  const pageScore  = stored.lastPageScore ?? 0;
+  const baseBudget = stored.budgetDate === today ? (stored.dailyBudget ?? 0) : 0;
+  const contribution = pageScore * (seconds / 60) / 100;
+  const nextBudget = Math.min(baseBudget + contribution, BUDGET_CEILING * BUDGET_OVERLOAD_MULTIPLIER);
+
+  // ── Break timer ──
+  const rawSeconds = (stored.focusSecondsSinceBreak ?? 0) + seconds;
+  const threshold  = (stored.breakThreshold ?? DEFAULT_BREAK_THRESHOLD) * 60;
+
+  await chrome.storage.local.set({
+    dailyBudget:            nextBudget,
+    budgetDate:             today,
+    focusSecondsSinceBreak: rawSeconds,
+  });
+
+  // ── Notify sidebar of budget update ──
+  try {
+    chrome.runtime.sendMessage({ type: 'BUDGET_UPDATED' });
+  } catch (_) { /* sidebar closed */ }
+
+  // ── Break suggestion popup ──
+  if (rawSeconds >= threshold && tabId !== null) {
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: 'SHOW_BREAK_POPUP' });
+      // Reset timer only after successfully notifying the content script.
+      await chrome.storage.local.set({ focusSecondsSinceBreak: 0 });
+    } catch (_) { /* content script not available */ }
+  }
+
+  // ── Record session chunk to FastAPI timeline ──
+  const pageUrl = stored.lastPageResult?.url ?? '';
+  if (pageUrl) {
+    const blocksData = stored.lastPageResult?.blocks ?? [];
+    const langMean = _mean(blocksData.map((b) => b.lang ?? 0));
+    const execMean = _mean(blocksData.map((b) => b.exec ?? 0));
+    const visMean  = _mean(blocksData.map((b) => b.vis  ?? 0));
+
+    fetch(SESSION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        page_url:       pageUrl,
+        timestamp:      new Date().toISOString(),
+        page_score:     pageScore,
+        page_label:     scoreLabel(pageScore),
+        active_seconds: seconds,
+        lang_mean:      langMean,
+        exec_mean:      execMean,
+        vis_mean:       visMean,
+      }),
+    }).catch(() => { /* server may not be running */ });
+  }
+}
+
+async function resetBreakTimer() {
+  await chrome.storage.local.set({ focusSecondsSinceBreak: 0 });
 }
 
 // ─── Brain budget helpers ─────────────────────────────────────────────────────
 
-/**
- * Add focus-minutes to today's cumulative brain budget.
- * focusMinutes = (page_score / 100) × reading_minutes, capped per session.
- */
-async function accumulateBudget(focusMinutes) {
-  const today = new Date().toDateString();
-  const stored = await chrome.storage.local.get(['dailyFocusMinutes', 'budgetDate']);
-
-  const base = stored.budgetDate === today ? (stored.dailyFocusMinutes ?? 0) : 0;
-  const next = base + focusMinutes;
-
-  await chrome.storage.local.set({ dailyFocusMinutes: next, budgetDate: today });
-}
-
 async function resetBudget() {
   await chrome.storage.local.set({
-    dailyFocusMinutes: 0,
-    budgetDate: new Date().toDateString(),
-    consecutiveFocusMinutes: 0,
-    lastSessionEndTime: Date.now(),
+    dailyBudget:            0,
+    budgetDate:             new Date().toDateString(),
+    focusSecondsSinceBreak: 0,
   });
 }
 
-// ─── Break suggestion ─────────────────────────────────────────────────────────
+// ─── Settings ─────────────────────────────────────────────────────────────────
 
-/**
- * Update the consecutive focus-minute counter. When the user-defined threshold
- * is crossed, send a SHOW_BREAK_POPUP message to the active tab and reset the
- * counter so the next break triggers after another full threshold cycle.
- */
-async function checkBreakSuggestion(focusContribution, activeTabId) {
-  const stored = await chrome.storage.local.get([
-    'consecutiveFocusMinutes',
-    'lastSessionEndTime',
-    'breakThreshold',
-  ]);
+async function getSettings() {
+  const stored = await chrome.storage.local.get(['breakThreshold']);
+  return {
+    breakThreshold: stored.breakThreshold ?? DEFAULT_BREAK_THRESHOLD,
+  };
+}
 
-  const threshold = stored.breakThreshold ?? DEFAULT_BREAK_THRESHOLD;
-  const lastEnd = stored.lastSessionEndTime ?? 0;
-
-  // Auto-reset if there has been a natural break (long gap between sessions).
-  const gapMinutes = lastEnd > 0 ? (Date.now() - lastEnd) / 60000 : 0;
-  const prevConsecutive = gapMinutes > BREAK_GAP_MINUTES
-    ? 0
-    : (stored.consecutiveFocusMinutes ?? 0);
-
-  const newConsecutive = prevConsecutive + focusContribution;
-  const now = Date.now();
-
-  // Notify the sidebar to refresh its display.
-  try { chrome.runtime.sendMessage({ type: 'STATE_UPDATED' }); } catch (_) {}
-
-  if (prevConsecutive < threshold && newConsecutive >= threshold) {
-    // Threshold just crossed – show break popup, then reset the consecutive
-    // counter so the user gets reminded again after another threshold cycle.
-    await chrome.storage.local.set({
-      consecutiveFocusMinutes: 0,
-      lastSessionEndTime: now,
-    });
-
-    if (activeTabId != null) {
-      try {
-        await chrome.tabs.sendMessage(activeTabId, { type: 'SHOW_BREAK_POPUP' });
-      } catch (_) {}
-    }
-  } else {
-    await chrome.storage.local.set({
-      consecutiveFocusMinutes: newConsecutive,
-      lastSessionEndTime: now,
-    });
+async function saveSettings(settings) {
+  const patch = {};
+  if (typeof settings.breakThreshold === 'number') {
+    patch.breakThreshold = Math.max(10, Math.min(60, Math.round(settings.breakThreshold)));
   }
+  await chrome.storage.local.set(patch);
 }
 
 // ─── State snapshot for sidebar ──────────────────────────────────────────────
@@ -323,40 +368,35 @@ async function getState() {
     'dailyFocusMinutes',
     'budgetDate',
     'lastPageResult',
-    'consecutiveFocusMinutes',
-    'lastSessionEndTime',
+    'focusSecondsSinceBreak',
     'breakThreshold',
   ]);
 
-  const rawMinutes = stored.budgetDate === today ? (stored.dailyFocusMinutes ?? 0) : 0;
-  const budgetPercent = Math.min(Math.round((rawMinutes / BUDGET_CEILING) * 100), 200);
+  const rawBudget  = stored.budgetDate === today ? (stored.dailyBudget ?? 0) : 0;
+  const budgetPercent = Math.min(Math.round((rawBudget / BUDGET_CEILING) * 100), 200);
 
-  const threshold = stored.breakThreshold ?? DEFAULT_BREAK_THRESHOLD;
-  const lastEnd = stored.lastSessionEndTime ?? 0;
-  const gapMinutes = lastEnd > 0 ? (Date.now() - lastEnd) / 60000 : 0;
-  const consecutiveMinutes = gapMinutes > BREAK_GAP_MINUTES
-    ? 0
-    : (stored.consecutiveFocusMinutes ?? 0);
+  const focusMinutesSinceBreak = Math.floor((stored.focusSecondsSinceBreak ?? 0) / 60);
+  const breakThreshold = stored.breakThreshold ?? DEFAULT_BREAK_THRESHOLD;
 
   return {
-    trackingEnabled: stored.trackingEnabled === true,
-    dailyFocusMinutes: rawMinutes,
+    trackingEnabled:      stored.trackingEnabled === true,
+    dailyBudget:          rawBudget,
     budgetPercent,
-    lastPageResult: stored.lastPageResult ?? null,
-    consecutiveFocusMinutes: consecutiveMinutes,
-    breakThreshold: threshold,
+    lastPageResult:       stored.lastPageResult ?? null,
+    focusMinutesSinceBreak,
+    breakThreshold,
   };
 }
 
-// ─── Log session to local server (for dashboard timeline) ────────────────────
+// ─── Utilities ────────────────────────────────────────────────────────────────
 
-async function logSessionToServer(sessionData) {
-  await fetch(LOG_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      ...sessionData,
-      timestamp: new Date().toISOString(),
-    }),
-  });
+function _mean(arr) {
+  if (!arr.length) return 0;
+  return arr.reduce((s, v) => s + v, 0) / arr.length;
+}
+
+function scoreLabel(score) {
+  if (score < 30) return 'low';
+  if (score < 60) return 'good';
+  return 'high';
 }
