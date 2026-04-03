@@ -5,6 +5,9 @@ Runs a FastAPI HTTP server on http://localhost:8787 that:
   • Accepts POST /predict from the browser extension.
   • Calls the TRIBE v2 inference pipeline (or heuristic stub if unavailable).
   • Returns per-block activation scores + a page-level cognitive load score.
+  • Accepts POST /session to store reading-session data for the timeline.
+  • Serves GET /timeline to return today's session history as JSON.
+  • Serves GET /dashboard for the local activity-timeline web dashboard.
 
 Quick start (Windows):
   python -m uvicorn app:app --host 127.0.0.1 --port 8787 --reload
@@ -15,11 +18,14 @@ or via the helper batch script:
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from model import model_status, predict_blocks
@@ -34,7 +40,7 @@ app = FastAPI(
         "Accepts page text blocks and returns cognitive-load scores derived "
         "from TRIBE v2 (or a heuristic stub when the model is unavailable)."
     ),
-    version="0.1.0",
+    version="0.2.0",
 )
 
 # Allow requests from the browser extension (chrome-extension:// scheme) and
@@ -45,6 +51,28 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
+
+# ── Session storage ───────────────────────────────────────────────────────────
+
+SESSIONS_FILE = Path(__file__).parent / "sessions.json"
+
+
+def _load_sessions() -> list[dict]:
+    if SESSIONS_FILE.exists():
+        try:
+            with SESSIONS_FILE.open(encoding="utf-8") as fh:
+                return json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            return []
+    return []
+
+
+def _append_session(session: dict) -> None:
+    sessions = _load_sessions()
+    sessions.append(session)
+    with SESSIONS_FILE.open("w", encoding="utf-8") as fh:
+        json.dump(sessions, fh, ensure_ascii=False, indent=2)
+
 
 # ── Request / Response schemas ────────────────────────────────────────────────
 
@@ -82,6 +110,21 @@ class PredictResponse(BaseModel):
     blocks:     List[ScoredBlock]
     model_mode: str   = Field(..., description="'tribe_v2' or 'heuristic_stub'")
     timestamp:  str
+
+
+class SessionRequest(BaseModel):
+    """A reading-time chunk reported by the extension every ~30 seconds."""
+    page_url:       str   = Field(..., description="URL of the page being read")
+    timestamp:      str   = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="ISO-8601 UTC timestamp of this chunk",
+    )
+    page_score:     float = Field(0.0, description="Page-level cognitive cost (0–100)")
+    page_label:     str   = Field("",  description="'low' | 'good' | 'high'")
+    active_seconds: float = Field(0.0, description="Seconds of active reading in this chunk")
+    lang_mean:      float = Field(0.0, description="Mean language-network activation (0–1)")
+    exec_mean:      float = Field(0.0, description="Mean executive-control activation (0–1)")
+    vis_mean:       float = Field(0.0, description="Mean visual-cortex activation (0–1)")
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -129,3 +172,404 @@ def predict(req: PredictRequest):
         model_mode = "tribe_v2" if is_real else "heuristic_stub",
         timestamp  = datetime.now(timezone.utc).isoformat(),
     )
+
+
+@app.post("/session", tags=["timeline"])
+def record_session(req: SessionRequest):
+    """
+    Store a reading-session chunk sent by the extension every ~30 s.
+    Used to build the activity timeline on the dashboard.
+    """
+    _append_session(req.model_dump())
+    return {"ok": True}
+
+
+@app.get("/timeline", tags=["timeline"])
+def get_timeline(date: str | None = None):
+    """
+    Return session chunks for a given day (defaults to today).
+    ``date`` should be an ISO date string such as ``2025-06-01``.
+    """
+    target_date = date or datetime.now().strftime("%Y-%m-%d")
+    all_sessions = _load_sessions()
+    day_sessions = [
+        s for s in all_sessions
+        if s.get("timestamp", "").startswith(target_date)
+    ]
+    return {"date": target_date, "sessions": day_sessions}
+
+
+@app.get("/dashboard", response_class=HTMLResponse, tags=["timeline"])
+def dashboard():
+    """Serve the local activity-timeline web dashboard."""
+    return HTMLResponse(content=_DASHBOARD_HTML, status_code=200)
+
+
+# ── Dashboard HTML ────────────────────────────────────────────────────────────
+
+_DASHBOARD_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FocusOS – Brain Activity Timeline</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg:        #0f1117;
+      --surface:   #1a1d27;
+      --border:    rgba(255,255,255,0.08);
+      --text:      #f0f0f2;
+      --muted:     #8b8fa8;
+      --green:     #22c55e;
+      --amber:     #eab308;
+      --red:       #ef4444;
+      --blue:      #6366f1;
+      --indigo:    #818cf8;
+      --purple:    #a78bfa;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      line-height: 1.55;
+      min-height: 100vh;
+      padding: 32px 24px 48px;
+    }
+    header {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+    h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }
+    h1 span { font-size: 26px; }
+    .subtitle { font-size: 13px; color: var(--muted); }
+    .date-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .date-bar label { font-size: 13px; color: var(--muted); }
+    .date-bar input[type=date] {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 13px;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    .date-bar input[type=date]:focus { outline: 2px solid var(--blue); }
+    .date-bar button {
+      background: var(--blue);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 13px;
+      padding: 6px 14px;
+      transition: opacity 0.2s;
+    }
+    .date-bar button:hover { opacity: 0.85; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 14px;
+      margin-bottom: 28px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .card-label {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .card-value {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .card-unit { font-size: 12px; color: var(--muted); margin-left: 2px; }
+    .chart-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px 20px 16px;
+      margin-bottom: 20px;
+    }
+    .chart-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--muted);
+      margin-bottom: 14px;
+    }
+    canvas { max-height: 280px; }
+    .empty-state {
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+      padding: 48px 0;
+    }
+    .empty-state .icon { font-size: 36px; margin-bottom: 10px; }
+    footer {
+      margin-top: 40px;
+      font-size: 11px;
+      color: var(--muted);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><span>🧠</span> FocusOS</h1>
+    <p class="subtitle">Brain Activity Timeline · local-only</p>
+  </header>
+
+  <div class="date-bar">
+    <label for="date-picker">Date:</label>
+    <input type="date" id="date-picker" />
+    <button id="load-btn">Load</button>
+  </div>
+
+  <div class="cards" id="stat-cards">
+    <div class="card">
+      <div class="card-label">Total focus time</div>
+      <div class="card-value" id="stat-total-min">—<span class="card-unit">min</span></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Weighted budget used</div>
+      <div class="card-value" id="stat-budget">—<span class="card-unit">pts</span></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Pages visited</div>
+      <div class="card-value" id="stat-pages">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Peak load score</div>
+      <div class="card-value" id="stat-peak">—</div>
+    </div>
+  </div>
+
+  <div class="chart-wrap">
+    <div class="chart-title">Cognitive Load Over Time (focus-minutes weighted)</div>
+    <canvas id="timeline-chart"></canvas>
+  </div>
+
+  <div class="chart-wrap">
+    <div class="chart-title">Network Activations Over Time</div>
+    <canvas id="network-chart"></canvas>
+  </div>
+
+  <div id="empty-msg" class="empty-state" style="display:none">
+    <div class="icon">📭</div>
+    <p>No data for this date yet.<br>Start browsing with FocusOS tracking enabled.</p>
+  </div>
+
+  <footer>
+    Data is stored locally on your machine. Not shared with any external service.
+    &nbsp;·&nbsp; FocusOS v0.2
+  </footer>
+
+  <script>
+    const API_BASE = window.location.origin;
+    let timelineChart = null;
+    let networkChart  = null;
+
+    // ── Initialise date picker to today ──────────────────────────────────────
+    const picker = document.getElementById('date-picker');
+    const today  = new Date().toISOString().slice(0, 10);
+    picker.value = today;
+
+    document.getElementById('load-btn').addEventListener('click', () => {
+      fetchAndRender(picker.value);
+    });
+
+    fetchAndRender(today);
+
+    // ── Fetch + render ────────────────────────────────────────────────────────
+    async function fetchAndRender(date) {
+      let data;
+      try {
+        const resp = await fetch(`${API_BASE}/timeline?date=${date}`);
+        data = await resp.json();
+      } catch (e) {
+        console.error('[FocusOS dashboard] Failed to fetch timeline:', e);
+        return;
+      }
+
+      const sessions = data.sessions ?? [];
+      const empty    = document.getElementById('empty-msg');
+
+      if (sessions.length === 0) {
+        empty.style.display = 'block';
+        updateStats([], date);
+        destroyCharts();
+        return;
+      }
+
+      empty.style.display = 'none';
+      updateStats(sessions, date);
+      renderTimelineChart(sessions);
+      renderNetworkChart(sessions);
+    }
+
+    // ── Stats cards ───────────────────────────────────────────────────────────
+    function updateStats(sessions, date) {
+      if (sessions.length === 0) {
+        ['stat-total-min', 'stat-budget', 'stat-pages', 'stat-peak'].forEach(id => {
+          document.getElementById(id).innerHTML = '—';
+        });
+        return;
+      }
+
+      const totalSec  = sessions.reduce((s, r) => s + (r.active_seconds ?? 0), 0);
+      const totalMin  = (totalSec / 60).toFixed(1);
+      const budget    = sessions.reduce((s, r) => {
+        return s + (r.page_score ?? 0) * (r.active_seconds ?? 0) / 6000;
+      }, 0).toFixed(1);
+      const pages     = new Set(sessions.map(r => r.page_url)).size;
+      const peakScore = Math.max(...sessions.map(r => r.page_score ?? 0)).toFixed(0);
+
+      document.getElementById('stat-total-min').innerHTML = `${totalMin}<span class="card-unit">min</span>`;
+      document.getElementById('stat-budget').innerHTML     = `${budget}<span class="card-unit">pts</span>`;
+      document.getElementById('stat-pages').innerHTML      = pages;
+      document.getElementById('stat-peak').innerHTML       = peakScore;
+    }
+
+    // ── Timeline chart (total load × time) ───────────────────────────────────
+    function renderTimelineChart(sessions) {
+      const ctx = document.getElementById('timeline-chart').getContext('2d');
+
+      // Group into 5-minute buckets, accumulate weighted focus-minutes.
+      const buckets = buildBuckets(sessions, r => {
+        return (r.page_score ?? 0) * (r.active_seconds ?? 0) / 6000;
+      });
+
+      if (timelineChart) timelineChart.destroy();
+
+      timelineChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: buckets.labels,
+          datasets: [{
+            label: 'Weighted focus-minutes',
+            data: buckets.values,
+            backgroundColor: 'rgba(99, 102, 241, 0.45)',
+            borderColor: 'rgba(99, 102, 241, 0.9)',
+            borderWidth: 1,
+            borderRadius: 3,
+          }],
+        },
+        options: chartOptions('Weighted focus-min per 5-min slot'),
+      });
+    }
+
+    // ── Network activation chart ──────────────────────────────────────────────
+    function renderNetworkChart(sessions) {
+      const ctx = document.getElementById('network-chart').getContext('2d');
+
+      const langB = buildBuckets(sessions, r => r.lang_mean ?? 0, 'mean');
+      const execB = buildBuckets(sessions, r => r.exec_mean ?? 0, 'mean');
+      const visB  = buildBuckets(sessions, r => r.vis_mean  ?? 0, 'mean');
+
+      if (networkChart) networkChart.destroy();
+
+      networkChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: langB.labels,
+          datasets: [
+            lineDataset('Language', langB.values, '#22c55e'),
+            lineDataset('Executive', execB.values, '#6366f1'),
+            lineDataset('Visual',    visB.values,  '#eab308'),
+          ],
+        },
+        options: chartOptions('Mean network activation (0–1)'),
+      });
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    function buildBuckets(sessions, valueFn, mode = 'sum') {
+      const BUCKET_MIN = 5;
+      const map = {};
+
+      sessions.forEach(r => {
+        const t    = new Date(r.timestamp);
+        const slot = Math.floor((t.getHours() * 60 + t.getMinutes()) / BUCKET_MIN) * BUCKET_MIN;
+        const hh   = String(Math.floor(slot / 60)).padStart(2, '0');
+        const mm   = String(slot % 60).padStart(2, '0');
+        const key  = `${hh}:${mm}`;
+        const val  = valueFn(r);
+
+        if (!map[key]) map[key] = { sum: 0, count: 0 };
+        map[key].sum   += val;
+        map[key].count += 1;
+      });
+
+      const keys   = Object.keys(map).sort();
+      const values = keys.map(k => mode === 'mean'
+        ? +(map[k].sum / map[k].count).toFixed(3)
+        : +map[k].sum.toFixed(3)
+      );
+
+      return { labels: keys, values };
+    }
+
+    function lineDataset(label, data, color) {
+      return {
+        label,
+        data,
+        borderColor: color,
+        backgroundColor: 'transparent',
+        pointRadius: 3,
+        pointBackgroundColor: color,
+        tension: 0.35,
+        borderWidth: 2,
+      };
+    }
+
+    function chartOptions(yLabel) {
+      return {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: {
+          legend: { labels: { color: '#8b8fa8', font: { size: 12 } } },
+          tooltip: { mode: 'index', intersect: false },
+        },
+        scales: {
+          x: {
+            ticks: { color: '#8b8fa8', font: { size: 11 }, maxRotation: 0 },
+            grid:  { color: 'rgba(255,255,255,0.05)' },
+          },
+          y: {
+            title: { display: true, text: yLabel, color: '#5a5d73', font: { size: 11 } },
+            ticks: { color: '#8b8fa8', font: { size: 11 } },
+            grid:  { color: 'rgba(255,255,255,0.05)' },
+            beginAtZero: true,
+          },
+        },
+      };
+    }
+
+    function destroyCharts() {
+      if (timelineChart) { timelineChart.destroy(); timelineChart = null; }
+      if (networkChart)  { networkChart.destroy();  networkChart  = null; }
+    }
+  </script>
+</body>
+</html>
+"""
+
