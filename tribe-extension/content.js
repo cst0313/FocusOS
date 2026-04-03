@@ -8,6 +8,8 @@
  *     overlay accordingly.
  *  3. Apply per-block color overlays (green / yellow / red) when the
  *     background script returns scored blocks.
+ *  4. Track active reading time and report to the background every 30 s.
+ *  5. Show / hide the brain-break popup when instructed by the background.
  *
  * All processing is local – no data leaves the machine.
  */
@@ -18,22 +20,77 @@ const MIN_BLOCK_LENGTH = 20;
 /** Maximum characters sent per block to keep API payloads reasonable. */
 const MAX_BLOCK_TEXT_LENGTH = 600;
 
+/** How often (ms) to report reading time to the background service worker. */
+const REPORT_INTERVAL_MS = 30_000;
+
+/** Minimum elapsed seconds required before sending a time report on stop. */
+const MIN_REPORT_SECONDS = 5;
+
 (function () {
   'use strict';
 
   /** IDs of elements that currently carry an overlay class */
   let overlayElements = [];
 
+  // ─── Reading-time tracking ────────────────────────────────────────────────
+
+  let trackingActive = false;
+  let pageVisible    = !document.hidden;
+  let segmentStart   = Date.now();   // start of the current visible segment
+  let reportTimer    = null;
+
+  function startTimer() {
+    if (reportTimer) return;
+    segmentStart = Date.now();
+    reportTimer  = setInterval(reportTime, REPORT_INTERVAL_MS);
+  }
+
+  function stopTimer() {
+    if (reportTimer) {
+      clearInterval(reportTimer);
+      reportTimer = null;
+    }
+    // Report any remaining seconds before stopping.
+    const elapsed = Math.round((Date.now() - segmentStart) / 1000);
+    if (elapsed >= MIN_REPORT_SECONDS) {
+      chrome.runtime.sendMessage({ type: 'READING_TIME_UPDATE', seconds: elapsed });
+    }
+    segmentStart = Date.now();
+  }
+
+  function reportTime() {
+    const elapsed = Math.round((Date.now() - segmentStart) / 1000);
+    segmentStart  = Date.now();
+    if (elapsed > 0) {
+      chrome.runtime.sendMessage({ type: 'READING_TIME_UPDATE', seconds: elapsed });
+    }
+  }
+
+  function updateTimerState() {
+    if (trackingActive && pageVisible) {
+      startTimer();
+    } else {
+      stopTimer();
+    }
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    pageVisible = !document.hidden;
+    updateTimerState();
+  });
+
   // ─── Messaging ────────────────────────────────────────────────────────────
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     switch (msg.type) {
       case 'TRACKING_STATE':
+        trackingActive = msg.enabled;
         if (msg.enabled) {
           runAnalysis();
         } else {
           clearOverlay();
         }
+        updateTimerState();
         sendResponse({ ok: true });
         break;
 
@@ -52,6 +109,11 @@ const MAX_BLOCK_TEXT_LENGTH = 600;
         sendResponse({ blocks });
         break;
       }
+
+      case 'SHOW_BREAK_POPUP':
+        showBreakPopup();
+        sendResponse({ ok: true });
+        break;
     }
     // Return true keeps the channel open for async responses.
     return true;
@@ -60,18 +122,22 @@ const MAX_BLOCK_TEXT_LENGTH = 600;
   // ─── Bootstrap ────────────────────────────────────────────────────────────
 
   chrome.storage.local.get(['trackingEnabled'], (result) => {
-    if (result.trackingEnabled === true) {
+    trackingActive = result.trackingEnabled === true;
+    if (trackingActive) {
       runAnalysis();
+      updateTimerState();
     }
   });
 
   chrome.storage.onChanged.addListener((changes) => {
     if ('trackingEnabled' in changes) {
-      if (changes.trackingEnabled.newValue === true) {
+      trackingActive = changes.trackingEnabled.newValue === true;
+      if (trackingActive) {
         runAnalysis();
       } else {
         clearOverlay();
       }
+      updateTimerState();
     }
   });
 
@@ -220,5 +286,42 @@ const MAX_BLOCK_TEXT_LENGTH = 600;
       el.classList.remove(...CLASSES);
       delete el.dataset.focusosId;
     });
+  }
+
+  // ─── Brain Break Popup ────────────────────────────────────────────────────
+
+  function showBreakPopup() {
+    hideBreakPopup(); // remove any existing popup first
+
+    const popup = document.createElement('div');
+    popup.id = 'focusos-break-popup';
+    popup.setAttribute('role', 'alert');
+    popup.setAttribute('aria-live', 'assertive');
+
+    popup.innerHTML = `
+      <div class="focusos-break-inner">
+        <span class="focusos-break-icon" aria-hidden="true">🧠</span>
+        <div class="focusos-break-body">
+          <strong class="focusos-break-title">Time for a brain break!</strong>
+          <p class="focusos-break-msg">Consider a short rest before your next deep read.</p>
+        </div>
+        <button class="focusos-break-dismiss" aria-label="Dismiss break reminder" title="Dismiss">✕</button>
+      </div>
+    `;
+
+    document.body.appendChild(popup);
+
+    popup.querySelector('.focusos-break-dismiss').addEventListener('click', () => {
+      hideBreakPopup();
+      chrome.runtime.sendMessage({ type: 'BREAK_DISMISSED' });
+    });
+
+    // Auto-dismiss after 8 seconds.
+    setTimeout(() => hideBreakPopup(), 8000);
+  }
+
+  function hideBreakPopup() {
+    const existing = document.getElementById('focusos-break-popup');
+    if (existing) existing.remove();
   }
 })();

@@ -4,39 +4,45 @@
  * Responsibilities:
  *  • Render tracking toggle, daily brain budget, current-page score,
  *    top high-load block list, and reading strategy recommendations.
+ *  • Render and persist the break-threshold settings slider.
  *  • Communicate with the background service worker via
  *    chrome.runtime.sendMessage().
- *  • Listen for live PAGE_ANALYZED updates and refresh the UI.
+ *  • Listen for live PAGE_ANALYZED / BUDGET_UPDATED updates and refresh the UI.
  */
 
 'use strict';
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 
-const toggleBtn       = document.getElementById('tracking-toggle');
-const trackingStatus  = document.getElementById('tracking-status-text');
-const trackingHint    = document.getElementById('tracking-hint');
-const budgetBar       = document.getElementById('budget-bar');
-const budgetBarWrap   = document.querySelector('.budget-bar-wrap');
-const budgetPct       = document.getElementById('budget-percent');
-const resetBudgetBtn  = document.getElementById('reset-budget-btn');
-const scoreBadge      = document.getElementById('page-score-badge');
-const scoreNumber     = document.getElementById('page-score-number');
-const pageSummary     = document.getElementById('page-summary');
-const topBlocksList   = document.getElementById('top-blocks-list');
-const strategyText    = document.getElementById('strategy-text');
+const toggleBtn        = document.getElementById('tracking-toggle');
+const trackingStatus   = document.getElementById('tracking-status-text');
+const trackingHint     = document.getElementById('tracking-hint');
+const budgetBar        = document.getElementById('budget-bar');
+const budgetBarWrap    = document.querySelector('.budget-bar-wrap');
+const budgetPct        = document.getElementById('budget-percent');
+const budgetFocusHint  = document.getElementById('budget-focus-hint');
+const resetBudgetBtn   = document.getElementById('reset-budget-btn');
+const scoreBadge       = document.getElementById('page-score-badge');
+const scoreNumber      = document.getElementById('page-score-number');
+const pageSummary      = document.getElementById('page-summary');
+const topBlocksList    = document.getElementById('top-blocks-list');
+const strategyText     = document.getElementById('strategy-text');
+const thresholdSlider  = document.getElementById('threshold-slider');
+const thresholdValue   = document.getElementById('threshold-value');
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
   loadAndRender();
+  loadSettings();
 
   toggleBtn.addEventListener('click', handleToggle);
   resetBudgetBtn.addEventListener('click', handleResetBudget);
+  thresholdSlider.addEventListener('input', handleThresholdChange);
 
   // Listen for live updates pushed from the background script.
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === 'PAGE_ANALYZED') {
+    if (msg.type === 'PAGE_ANALYZED' || msg.type === 'BUDGET_UPDATED') {
       loadAndRender();
     }
   });
@@ -46,8 +52,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function loadAndRender() {
   const state = await bg('GET_STATE');
+  if (!state) return;
   renderTracking(state.trackingEnabled);
-  renderBudget(state.budgetPercent);
+  renderBudget(state.budgetPercent, state.focusMinutesSinceBreak, state.breakThreshold);
   if (state.lastPageResult) {
     renderPageResult(state.lastPageResult);
   }
@@ -79,12 +86,20 @@ function renderTracking(enabled) {
 
 // ─── Budget ───────────────────────────────────────────────────────────────────
 
-function renderBudget(percent) {
+function renderBudget(percent, focusMinutesSinceBreak, breakThreshold) {
   const capped = Math.min(percent, 100);
   budgetBar.style.width = capped + '%';
   budgetBarWrap.setAttribute('aria-valuenow', capped);
   budgetPct.textContent = percent + '%';
   budgetPct.style.color = budgetColour(percent);
+
+  // Show focus-minutes since last break as a hint below the bar.
+  if (typeof focusMinutesSinceBreak === 'number' && typeof breakThreshold === 'number') {
+    budgetFocusHint.textContent =
+      `${focusMinutesSinceBreak} / ${breakThreshold} focus-min since last break`;
+  } else {
+    budgetFocusHint.textContent = '';
+  }
 }
 
 function budgetColour(pct) {
@@ -95,7 +110,7 @@ function budgetColour(pct) {
 
 async function handleResetBudget() {
   await bg('RESET_BUDGET');
-  renderBudget(0);
+  renderBudget(0, 0, parseInt(thresholdSlider.value, 10));
 }
 
 // ─── Page result ──────────────────────────────────────────────────────────────
@@ -182,6 +197,22 @@ function blockClass(load) {
   if (load < 0.33) return 'low';
   if (load < 0.66) return 'medium';
   return 'high';
+}
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+
+async function loadSettings() {
+  const settings = await bg('GET_SETTINGS');
+  if (!settings) return;
+  const threshold = settings.breakThreshold ?? 20;
+  thresholdSlider.value = threshold;
+  thresholdValue.textContent = threshold;
+}
+
+function handleThresholdChange() {
+  const val = parseInt(thresholdSlider.value, 10);
+  thresholdValue.textContent = val;
+  bg('SET_SETTINGS', { settings: { breakThreshold: val } });
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
