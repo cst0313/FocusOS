@@ -49,17 +49,36 @@ hardware instantly.
 
 To enable **real TRIBE v2 inference**:
 
-1. Accept the model licence on Hugging Face and log in:
+1. Accept the model licence on Hugging Face and request access to the gated
+   **LLaMA 3.2** model (used by the TRIBE v2 text encoder).
+
+2. Install TRIBE v2 from the official GitHub repository (there is no PyPI
+   package named `tribev2`):
 
    ```bat
-   pip install tribev2
+   pip install -U huggingface_hub
+   pip install "tribev2[plotting] @ git+https://github.com/facebookresearch/tribev2.git"
+   ```
+
+   > If you don’t need 3D brain visualizations, you can omit `plotting`:
+   >
+   > ```bat
+   > pip install "tribev2 @ git+https://github.com/facebookresearch/tribev2.git"
+   > ```
+
+3. Log in to Hugging Face (this installs the `huggingface-cli` command):
+
+   ```bat
    huggingface-cli login
    ```
 
-2. Ensure you have accepted the **LLaMA 3.2 gated model** access as well
-   (TRIBE v2 uses LLaMA 3.2 internally for the text encoder).
+4. Restart the server. It will download the TRIBE v2 checkpoint (~1 GB) on
+   first run and print `Loading TRIBE v2 model…`.
 
-3. Restart the server.  It will print `Loading TRIBE v2 model…` on first run.
+Reference implementations:
+- TRIBE v2 model card: <https://huggingface.co/facebook/tribev2>
+- TRIBE v2 Colab demo: <https://colab.research.google.com/github/facebookresearch/tribev2/blob/main/tribe_demo.ipynb>
+- Meta blog: <https://ai.meta.com/blog/tribe-v2-brain-predictive-foundation-model/>
 
 > **Hardware note:** TRIBE v2 is a large multi-modal model.  A CUDA-capable
 > NVIDIA GPU (8 GB+ VRAM) is strongly recommended for reasonable inference
