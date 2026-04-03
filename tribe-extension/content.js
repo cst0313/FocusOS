@@ -8,6 +8,10 @@
  *     overlay accordingly.
  *  3. Apply per-block color overlays (green / yellow / red) when the
  *     background script returns scored blocks.
+ *  4. Track active reading time using document.visibilityState, report elapsed
+ *     seconds to the background when the page becomes hidden or unloads.
+ *  5. Display a non-jarring brain-break toast popup when requested by the
+ *     background script.
  *
  * All processing is local – no data leaves the machine.
  */
@@ -24,6 +28,49 @@ const MAX_BLOCK_TEXT_LENGTH = 600;
   /** IDs of elements that currently carry an overlay class */
   let overlayElements = [];
 
+  /**
+   * The page-level cognitive load score (0–100) last reported by the
+   * background script. Used to weight reading-time contributions.
+   */
+  let currentPageScore = 0;
+
+  /**
+   * Timestamp (ms) when active reading started on this page.
+   * null when the page is hidden / user is on another tab.
+   */
+  let readingStartTime = document.visibilityState === 'visible' ? Date.now() : null;
+
+  // ─── Reading Time Tracking ─────────────────────────────────────────────────
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      // Page became active – (re)start the reading timer.
+      readingStartTime = Date.now();
+    } else {
+      // Page became hidden – report elapsed reading time to the background.
+      sendReadingSessionEnd();
+    }
+  });
+
+  window.addEventListener('beforeunload', () => {
+    sendReadingSessionEnd();
+  });
+
+  function sendReadingSessionEnd() {
+    if (readingStartTime === null) return;
+    const elapsedSeconds = (Date.now() - readingStartTime) / 1000;
+    readingStartTime = null; // prevent double-reporting
+
+    if (elapsedSeconds < 6) return; // ignore very brief visits (< 6 s)
+
+    chrome.runtime.sendMessage({
+      type: 'READING_SESSION_END',
+      elapsedSeconds,
+      pageScore: currentPageScore,
+      url: window.location.href,
+    }).catch(() => { /* service worker may be inactive */ });
+  }
+
   // ─── Messaging ────────────────────────────────────────────────────────────
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -39,6 +86,10 @@ const MAX_BLOCK_TEXT_LENGTH = 600;
 
       case 'APPLY_SCORES':
         applyHeatmap(msg.blocks);
+        // Update local page score so reading-time tracking uses the right value.
+        if (msg.pageScore != null) {
+          currentPageScore = msg.pageScore;
+        }
         sendResponse({ ok: true });
         break;
 
@@ -52,6 +103,11 @@ const MAX_BLOCK_TEXT_LENGTH = 600;
         sendResponse({ blocks });
         break;
       }
+
+      case 'SHOW_BREAK_POPUP':
+        showBreakPopup();
+        sendResponse({ ok: true });
+        break;
     }
     // Return true keeps the channel open for async responses.
     return true;
@@ -220,5 +276,41 @@ const MAX_BLOCK_TEXT_LENGTH = 600;
       el.classList.remove(...CLASSES);
       delete el.dataset.focusosId;
     });
+  }
+
+  // ─── Brain Break Popup ────────────────────────────────────────────────────
+
+  /**
+   * Display a subtle, auto-dismissing toast popup recommending a brain break.
+   * The popup auto-dismisses after 6 seconds or on the user's click.
+   */
+  function showBreakPopup() {
+    // Remove any existing popup to prevent duplicates.
+    const existing = document.getElementById('focusos-break-popup');
+    if (existing) existing.remove();
+
+    const popup = document.createElement('div');
+    popup.id = 'focusos-break-popup';
+    popup.setAttribute('role', 'status');
+    popup.setAttribute('aria-live', 'polite');
+    popup.innerHTML =
+      '<span class="focusos-break-icon" aria-hidden="true">\uD83E\uDDE0</span>' +
+      '<span class="focusos-break-msg">Time for a quick brain break! Consider a short walk or rest before your next read.</span>' +
+      '<button class="focusos-break-dismiss" aria-label="Dismiss brain break reminder">\u2715</button>';
+
+    document.body.appendChild(popup);
+
+    // Trigger CSS enter animation on the next paint.
+    requestAnimationFrame(() => popup.classList.add('focusos-break-popup-visible'));
+
+    const dismiss = () => {
+      popup.classList.remove('focusos-break-popup-visible');
+      setTimeout(() => { if (popup.parentNode) popup.remove(); }, 400);
+    };
+
+    popup.querySelector('.focusos-break-dismiss').addEventListener('click', dismiss);
+
+    // Auto-dismiss after 6 seconds.
+    setTimeout(dismiss, 6000);
   }
 })();

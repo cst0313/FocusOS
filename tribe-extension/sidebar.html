@@ -51,7 +51,34 @@
       </div>
       <div class="budget-meta">
         <span id="budget-percent" class="budget-pct">0%</span>
+        <span id="budget-minutes" class="budget-minutes">0.0 / 100 focus-min</span>
         <button id="reset-budget-btn" class="link-btn" title="Reset today's budget">Reset</button>
+      </div>
+    </section>
+
+    <!-- ── Focus Session ──────────────────── -->
+    <section class="card session-card" aria-labelledby="session-label">
+      <span id="session-label" class="card-label">Focus Session</span>
+      <div class="session-row">
+        <div class="session-minutes-wrap">
+          <span id="consecutive-minutes" class="session-minutes">0.0</span>
+          <span class="session-unit"> / <span id="threshold-inline">20</span> focus-min</span>
+        </div>
+        <button id="reset-session-btn" class="link-btn" title="Reset consecutive focus timer">Reset</button>
+      </div>
+      <div class="session-bar-wrap">
+        <div class="session-bar" id="session-bar"></div>
+      </div>
+      <div class="threshold-row" title="Break will be suggested after this many consecutive focus-minutes">
+        <label for="break-threshold-input" class="threshold-label">Break after</label>
+        <input
+          type="range"
+          id="break-threshold-input"
+          min="10" max="60" step="5" value="20"
+          class="threshold-slider"
+          aria-label="Break threshold in focus-minutes"
+        />
+        <span id="threshold-value-display" class="threshold-value">20 min</span>
       </div>
     </section>
 
@@ -87,6 +114,9 @@
           TRIBE&nbsp;v2
         </a>
         · average-subject fMRI model<br />
+        <a href="http://127.0.0.1:8787/dashboard" target="_blank" rel="noopener" class="dashboard-link">
+          📊 View Activity Timeline
+        </a><br />
         <span class="footer-notice">Not a medical tool. Local inference only.</span>
       </p>
     </footer>

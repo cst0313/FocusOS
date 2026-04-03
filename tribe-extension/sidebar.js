@@ -2,29 +2,37 @@
  * sidebar.js – FocusOS Sidebar Logic
  *
  * Responsibilities:
- *  • Render tracking toggle, daily brain budget, current-page score,
- *    top high-load block list, and reading strategy recommendations.
+ *  • Render tracking toggle, daily brain budget (focus-minutes), current-page
+ *    score, top high-load block list, reading strategy recommendations.
+ *  • Show consecutive focus-minute progress and a user-tunable break threshold.
  *  • Communicate with the background service worker via
  *    chrome.runtime.sendMessage().
- *  • Listen for live PAGE_ANALYZED updates and refresh the UI.
+ *  • Listen for live PAGE_ANALYZED / STATE_UPDATED updates and refresh the UI.
  */
 
 'use strict';
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 
-const toggleBtn       = document.getElementById('tracking-toggle');
-const trackingStatus  = document.getElementById('tracking-status-text');
-const trackingHint    = document.getElementById('tracking-hint');
-const budgetBar       = document.getElementById('budget-bar');
-const budgetBarWrap   = document.querySelector('.budget-bar-wrap');
-const budgetPct       = document.getElementById('budget-percent');
-const resetBudgetBtn  = document.getElementById('reset-budget-btn');
-const scoreBadge      = document.getElementById('page-score-badge');
-const scoreNumber     = document.getElementById('page-score-number');
-const pageSummary     = document.getElementById('page-summary');
-const topBlocksList   = document.getElementById('top-blocks-list');
-const strategyText    = document.getElementById('strategy-text');
+const toggleBtn            = document.getElementById('tracking-toggle');
+const trackingStatus       = document.getElementById('tracking-status-text');
+const trackingHint         = document.getElementById('tracking-hint');
+const budgetBar            = document.getElementById('budget-bar');
+const budgetBarWrap        = document.querySelector('.budget-bar-wrap');
+const budgetPct            = document.getElementById('budget-percent');
+const budgetMinutes        = document.getElementById('budget-minutes');
+const resetBudgetBtn       = document.getElementById('reset-budget-btn');
+const scoreBadge           = document.getElementById('page-score-badge');
+const scoreNumber          = document.getElementById('page-score-number');
+const pageSummary          = document.getElementById('page-summary');
+const topBlocksList        = document.getElementById('top-blocks-list');
+const strategyText         = document.getElementById('strategy-text');
+const consecutiveMinEl     = document.getElementById('consecutive-minutes');
+const thresholdInlineEl    = document.getElementById('threshold-inline');
+const sessionBar           = document.getElementById('session-bar');
+const resetSessionBtn      = document.getElementById('reset-session-btn');
+const thresholdInput       = document.getElementById('break-threshold-input');
+const thresholdValueDisplay= document.getElementById('threshold-value-display');
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 
@@ -33,10 +41,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
   toggleBtn.addEventListener('click', handleToggle);
   resetBudgetBtn.addEventListener('click', handleResetBudget);
+  resetSessionBtn.addEventListener('click', handleResetSession);
+
+  // Threshold slider: live display + save on change.
+  thresholdInput.addEventListener('input', () => {
+    const val = Number(thresholdInput.value);
+    thresholdValueDisplay.textContent = val + ' min';
+    thresholdInlineEl.textContent = val;
+  });
+  thresholdInput.addEventListener('change', () => {
+    bg('SET_BREAK_THRESHOLD', { threshold: Number(thresholdInput.value) });
+  });
 
   // Listen for live updates pushed from the background script.
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === 'PAGE_ANALYZED') {
+    if (msg.type === 'PAGE_ANALYZED' || msg.type === 'STATE_UPDATED') {
       loadAndRender();
     }
   });
@@ -46,8 +65,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function loadAndRender() {
   const state = await bg('GET_STATE');
+  if (!state) return;
   renderTracking(state.trackingEnabled);
-  renderBudget(state.budgetPercent);
+  renderBudget(state.budgetPercent, state.dailyFocusMinutes ?? 0);
+  renderSession(state.consecutiveFocusMinutes ?? 0, state.breakThreshold ?? 20);
   if (state.lastPageResult) {
     renderPageResult(state.lastPageResult);
   }
@@ -79,12 +100,15 @@ function renderTracking(enabled) {
 
 // ─── Budget ───────────────────────────────────────────────────────────────────
 
-function renderBudget(percent) {
+function renderBudget(percent, rawMinutes) {
   const capped = Math.min(percent, 100);
   budgetBar.style.width = capped + '%';
   budgetBarWrap.setAttribute('aria-valuenow', capped);
   budgetPct.textContent = percent + '%';
   budgetPct.style.color = budgetColour(percent);
+  if (budgetMinutes) {
+    budgetMinutes.textContent = rawMinutes.toFixed(1) + ' / 100 focus-min';
+  }
 }
 
 function budgetColour(pct) {
@@ -95,7 +119,38 @@ function budgetColour(pct) {
 
 async function handleResetBudget() {
   await bg('RESET_BUDGET');
-  renderBudget(0);
+  renderBudget(0, 0);
+  renderSession(0, Number(thresholdInput.value) || 20);
+}
+
+// ─── Focus Session ────────────────────────────────────────────────────────────
+
+function renderSession(consecutiveMinutes, threshold) {
+  const display = consecutiveMinutes.toFixed(1);
+  consecutiveMinEl.textContent = display;
+  thresholdInlineEl.textContent = threshold;
+
+  // Sync slider (only if user isn't actively dragging it).
+  if (document.activeElement !== thresholdInput) {
+    thresholdInput.value = threshold;
+    thresholdValueDisplay.textContent = threshold + ' min';
+  }
+
+  // Session progress bar (0–threshold → 0–100%).
+  const pct = Math.min((consecutiveMinutes / threshold) * 100, 100);
+  sessionBar.style.width = pct + '%';
+  sessionBar.className = 'session-bar ' + sessionBarColour(pct);
+}
+
+function sessionBarColour(pct) {
+  if (pct < 50) return 'low';
+  if (pct < 85) return 'medium';
+  return 'high';
+}
+
+async function handleResetSession() {
+  await bg('RESET_CONSECUTIVE');
+  renderSession(0, Number(thresholdInput.value) || 20);
 }
 
 // ─── Page result ──────────────────────────────────────────────────────────────
