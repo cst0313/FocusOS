@@ -50,12 +50,12 @@ const MIN_REPORT_SECONDS = 5;
   function engagedSecondsWithin(elapsedSeconds) {
     if (elapsedSeconds <= 0) return 0;
     const now = Date.now();
-    const msSinceInteraction = now - interactionAt;
-    if (msSinceInteraction >= INTERACTION_ENGAGEMENT_WINDOW_MS) return 0;
-    const engagementMs = Math.min(
-      INTERACTION_ENGAGEMENT_WINDOW_MS - msSinceInteraction,
-      elapsedSeconds * 1000
-    );
+    const periodStartMs = now - (elapsedSeconds * 1000);
+    const engagementStartMs = interactionAt;
+    const engagementEndMs = interactionAt + INTERACTION_ENGAGEMENT_WINDOW_MS;
+    const overlapStart = Math.max(periodStartMs, engagementStartMs);
+    const overlapEnd = Math.min(now, engagementEndMs);
+    const engagementMs = Math.max(0, overlapEnd - overlapStart);
     return Math.round(Math.max(0, engagementMs) / 1000);
   }
 

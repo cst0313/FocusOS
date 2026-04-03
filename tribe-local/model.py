@@ -22,6 +22,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import inspect
 from pathlib import Path
 from typing import Any
 
@@ -68,29 +69,54 @@ def _load_model() -> Any:
         ckpt_path = _resolve_local_ckpt()
 
         if ckpt_path is not None:
-            last_error = None
-            for kwargs in (
-                {"checkpoint_path": str(ckpt_path)},
-                {"ckpt_path": str(ckpt_path)},
-                {"checkpoint": str(ckpt_path)},
-                {"model_path": str(ckpt_path)},
-                {"path": str(ckpt_path)},
-                {"pretrained_model_name_or_path": str(ckpt_path)},
-            ):
-                try:
-                    _model = tribev2.load_model(**kwargs)
+            try:
+                _model = _load_model_from_ckpt(tribev2, ckpt_path)
+                if _model is not None:
                     _MODEL_SOURCE = f"local_ckpt:{ckpt_path}"
-                    break
-                except TypeError as exc:
-                    last_error = exc
-            if _model is None and last_error is not None:
-                print(f"[FocusOS] Local checkpoint signature not matched ({last_error}); falling back.")
+            except Exception as exc:
+                print(f"[FocusOS] Local checkpoint load failed ({exc}); falling back.")
 
         if _model is None:
             _model = tribev2.load_model("facebook/tribev2")
             _MODEL_SOURCE = "huggingface:facebook/tribev2"
         print("[FocusOS] TRIBE v2 model loaded.")
     return _model
+
+
+def _load_model_from_ckpt(tribev2_module: Any, ckpt_path: Path) -> Any | None:
+    """
+    Load model from local checkpoint using load_model signature introspection.
+    Returns None when no compatible local-checkpoint parameter is found.
+    """
+    load_model = tribev2_module.load_model
+    sig = inspect.signature(load_model)
+    params = sig.parameters
+
+    candidate_keys = (
+        "checkpoint_path",
+        "ckpt_path",
+        "checkpoint",
+        "model_path",
+        "path",
+        "pretrained_model_name_or_path",
+    )
+    for key in candidate_keys:
+        if key in params:
+            return load_model(**{key: str(ckpt_path)})
+
+    accepts_kwargs = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+    if accepts_kwargs:
+        return load_model(checkpoint_path=str(ckpt_path))
+
+    # Last fallback for signatures that accept a single positional model source.
+    if params:
+        first = next(iter(params.values()))
+        if first.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+            return load_model(str(ckpt_path))
+
+    return None
 
 
 # ── Public API ────────────────────────────────────────────────────────────────

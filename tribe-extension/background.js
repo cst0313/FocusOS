@@ -294,7 +294,7 @@ async function handleReadingTimeUpdate(seconds, engagedSeconds, tabId) {
   // ── Time-weighted budget ──
   const tabScores = stored.pageScoresByTab ?? {};
   const tabKey = tabId !== null ? String(tabId) : null;
-  const pageScore  = (tabKey && typeof tabScores[tabKey] === 'number')
+  const pageScore = (tabKey && typeof tabScores[tabKey] === 'number')
     ? tabScores[tabKey]
     : (stored.lastPageScore ?? 0);
   const baseBudget = stored.budgetDate === today ? (stored.dailyBudget ?? 0) : 0;
