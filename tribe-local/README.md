@@ -52,24 +52,25 @@ To enable **real TRIBE v2 inference**:
 1. Accept the model licence on Hugging Face and request access to the gated
    **LLaMA 3.2** model (used by the TRIBE v2 text encoder).
 
-2. Install TRIBE v2 from the official GitHub repository (there is no PyPI
-   package named `tribev2`):
+2. Install PyTorch and TRIBE v2 from the official GitHub repository (there is no
+   PyPI package named `tribev2`):
 
    ```bat
+   pip install torch
    pip install -U huggingface_hub
    pip install "tribev2[plotting] @ git+https://github.com/facebookresearch/tribev2.git"
    ```
-
+   
    > If you don’t need 3D brain visualizations, you can omit `plotting`:
    >
    > ```bat
    > pip install "tribev2 @ git+https://github.com/facebookresearch/tribev2.git"
    > ```
 
-3. Log in to Hugging Face (this installs the `huggingface-cli` command):
+3. Log in to Hugging Face (use the CLI executable from the venv):
 
    ```bat
-   huggingface-cli login
+   .venv\Scripts\hf.exe auth login
    ```
 
 4. Restart the server. It will download the TRIBE v2 checkpoint (~1 GB) on
