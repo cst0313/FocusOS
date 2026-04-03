@@ -38,6 +38,26 @@ const MIN_REPORT_SECONDS = 5;
   let pageVisible    = !document.hidden;
   let segmentStart   = Date.now();   // start of the current visible segment
   let reportTimer    = null;
+  let interactionAt  = Date.now();
+
+  const INTERACTION_ENGAGEMENT_WINDOW_MS = 45_000;
+  const MAX_REPORT_SECONDS = 90;
+
+  function markInteraction() {
+    interactionAt = Date.now();
+  }
+
+  function engagedSecondsWithin(elapsedSeconds) {
+    if (elapsedSeconds <= 0) return 0;
+    const now = Date.now();
+    const msSinceInteraction = now - interactionAt;
+    if (msSinceInteraction >= INTERACTION_ENGAGEMENT_WINDOW_MS) return 0;
+    const engagementMs = Math.min(
+      INTERACTION_ENGAGEMENT_WINDOW_MS - msSinceInteraction,
+      elapsedSeconds * 1000
+    );
+    return Math.round(Math.max(0, engagementMs) / 1000);
+  }
 
   function startTimer() {
     if (reportTimer) return;
@@ -51,18 +71,32 @@ const MIN_REPORT_SECONDS = 5;
       reportTimer = null;
     }
     // Report any remaining seconds before stopping.
-    const elapsed = Math.round((Date.now() - segmentStart) / 1000);
+    const elapsed = Math.min(Math.round((Date.now() - segmentStart) / 1000), MAX_REPORT_SECONDS);
     if (elapsed >= MIN_REPORT_SECONDS) {
-      chrome.runtime.sendMessage({ type: 'READING_TIME_UPDATE', seconds: elapsed });
+      const engaged = engagedSecondsWithin(elapsed);
+      if (engaged >= MIN_REPORT_SECONDS) {
+        chrome.runtime.sendMessage({
+          type: 'READING_TIME_UPDATE',
+          seconds: elapsed,
+          engagedSeconds: engaged,
+        });
+      }
     }
     segmentStart = Date.now();
   }
 
   function reportTime() {
-    const elapsed = Math.round((Date.now() - segmentStart) / 1000);
+    const elapsed = Math.min(Math.round((Date.now() - segmentStart) / 1000), MAX_REPORT_SECONDS);
     segmentStart  = Date.now();
     if (elapsed > 0) {
-      chrome.runtime.sendMessage({ type: 'READING_TIME_UPDATE', seconds: elapsed });
+      const engaged = engagedSecondsWithin(elapsed);
+      if (engaged > 0) {
+        chrome.runtime.sendMessage({
+          type: 'READING_TIME_UPDATE',
+          seconds: elapsed,
+          engagedSeconds: engaged,
+        });
+      }
     }
   }
 
@@ -78,6 +112,10 @@ const MIN_REPORT_SECONDS = 5;
     pageVisible = !document.hidden;
     updateTimerState();
   });
+  window.addEventListener('scroll', markInteraction, { passive: true });
+  window.addEventListener('mousemove', markInteraction, { passive: true });
+  window.addEventListener('keydown', markInteraction, { passive: true });
+  window.addEventListener('touchstart', markInteraction, { passive: true });
 
   // ─── Messaging ────────────────────────────────────────────────────────────
 
@@ -96,10 +134,6 @@ const MIN_REPORT_SECONDS = 5;
 
       case 'APPLY_SCORES':
         applyHeatmap(msg.blocks);
-        // Update local page score so reading-time tracking uses the right value.
-        if (msg.pageScore != null) {
-          currentPageScore = msg.pageScore;
-        }
         sendResponse({ ok: true });
         break;
 

@@ -37,6 +37,12 @@ const DEFAULT_BREAK_THRESHOLD = 20;
  */
 const CONTENT_SCRIPT_INIT_DELAY_MS = 800;
 
+/**
+ * Ignore oversized time chunks (sleep/wake, throttled timers, etc.) to avoid
+ * runaway budget spikes from a single delayed callback.
+ */
+const MAX_REPORT_SECONDS = 90;
+
 // ─── Side panel ──────────────────────────────────────────────────────────────
 
 chrome.action.onClicked.addListener((tab) => {
@@ -103,7 +109,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
 
     case 'READING_TIME_UPDATE':
-      handleReadingTimeUpdate(msg.seconds, tabId).then(() => sendResponse({ ok: true }));
+      handleReadingTimeUpdate(msg.seconds, msg.engagedSeconds, tabId).then(() => sendResponse({ ok: true }));
       return true;
 
     case 'BREAK_DISMISSED':
@@ -159,9 +165,17 @@ async function analyzePage({ url, blocks }, tabId) {
     }
   }
 
-  // 2. Store the latest page score so time-based budget accumulation can use it.
+  // 2. Store the latest page score globally and per-tab for time attribution.
   const pageScore = data.page_score ?? 0;
-  await chrome.storage.local.set({ lastPageScore: pageScore });
+  const tabScores = await chrome.storage.local.get(['pageScoresByTab']);
+  const pageScoresByTab = tabScores.pageScoresByTab ?? {};
+  if (tabId !== null) {
+    pageScoresByTab[String(tabId)] = pageScore;
+  }
+  await chrome.storage.local.set({
+    lastPageScore: pageScore,
+    pageScoresByTab,
+  });
 
   // 3. Persist the latest page result for the sidebar.
   await chrome.storage.local.set({
@@ -258,14 +272,18 @@ async function setTracking(enabled, activeTabId) {
  * break suggestion depends only on how long the user has been reading,
  * not on the cognitive weight of each page.
  */
-async function handleReadingTimeUpdate(seconds, tabId) {
+async function handleReadingTimeUpdate(seconds, engagedSeconds, tabId) {
   if (!seconds || seconds <= 0) return;
+  if (seconds > MAX_REPORT_SECONDS) return;
+  const engaged = Math.max(0, Math.min(engagedSeconds ?? seconds, seconds));
+  if (engaged <= 0) return;
 
   const today = new Date().toDateString();
   const stored = await chrome.storage.local.get([
     'dailyBudget',
     'budgetDate',
     'lastPageScore',
+    'pageScoresByTab',
     'focusSecondsSinceBreak',
     'breakThreshold',
     'lastSessionSeconds',
@@ -274,13 +292,17 @@ async function handleReadingTimeUpdate(seconds, tabId) {
   ]);
 
   // ── Time-weighted budget ──
-  const pageScore  = stored.lastPageScore ?? 0;
+  const tabScores = stored.pageScoresByTab ?? {};
+  const tabKey = tabId !== null ? String(tabId) : null;
+  const pageScore  = (tabKey && typeof tabScores[tabKey] === 'number')
+    ? tabScores[tabKey]
+    : (stored.lastPageScore ?? 0);
   const baseBudget = stored.budgetDate === today ? (stored.dailyBudget ?? 0) : 0;
-  const contribution = pageScore * (seconds / 60) / 100;
+  const contribution = pageScore * (engaged / 60) / 100;
   const nextBudget = Math.min(baseBudget + contribution, BUDGET_CEILING * BUDGET_OVERLOAD_MULTIPLIER);
 
   // ── Break timer ──
-  const rawSeconds = (stored.focusSecondsSinceBreak ?? 0) + seconds;
+  const rawSeconds = (stored.focusSecondsSinceBreak ?? 0) + engaged;
   const threshold  = (stored.breakThreshold ?? DEFAULT_BREAK_THRESHOLD) * 60;
 
   await chrome.storage.local.set({
@@ -319,7 +341,7 @@ async function handleReadingTimeUpdate(seconds, tabId) {
         timestamp:      new Date().toISOString(),
         page_score:     pageScore,
         page_label:     scoreLabel(pageScore),
-        active_seconds: seconds,
+        active_seconds: engaged,
         lang_mean:      langMean,
         exec_mean:      execMean,
         vis_mean:       visMean,
@@ -387,6 +409,15 @@ async function getState() {
     breakThreshold,
   };
 }
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const stored = await chrome.storage.local.get(['pageScoresByTab']);
+  const pageScoresByTab = stored.pageScoresByTab ?? {};
+  const key = String(tabId);
+  if (!(key in pageScoresByTab)) return;
+  delete pageScoresByTab[key];
+  await chrome.storage.local.set({ pageScoresByTab });
+});
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 

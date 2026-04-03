@@ -5,18 +5,16 @@ Provides a single public function `predict_blocks(blocks)` that accepts a list
 of text-block dicts and returns per-block activation scores (lang / exec / vis).
 
 Two modes are supported:
-  1. TRIBE v2 (real)  — loads `facebook/tribev2` from Hugging Face.
-                         Requires `pip install tribev2` and a logged-in
-                         `huggingface-cli` session with access to the gated
-                         LLaMA 3.2 weights.
+  1. TRIBE v2 (real)  — prefers a local checkpoint (`best.ckpt`) when present,
+                         otherwise falls back to `facebook/tribev2`.
   2. Stub / heuristic — activated automatically when the TRIBE v2 package is
                          unavailable.  Uses lightweight text statistics
                          (sentence complexity, vocab richness, word length) to
                          produce plausible demo activations.  Clearly labelled
                          as non-model output in the API response.
 
-Set the environment variable FOCUSOS_STUB=1 to force stub mode even when
-TRIBE v2 is installed (useful for testing without a GPU).
+Set FOCUSOS_STUB=1 to force stub mode and FOCUSOS_CKPT to override checkpoint
+path discovery.
 """
 
 from __future__ import annotations
@@ -24,12 +22,14 @@ from __future__ import annotations
 import math
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 # ── Try importing TRIBE v2 ────────────────────────────────────────────────────
 
 _TRIBE_AVAILABLE = False
 _STUB_FORCED     = os.getenv("FOCUSOS_STUB", "").strip() in ("1", "true", "yes")
+_MODEL_SOURCE    = "heuristic_stub"
 
 if not _STUB_FORCED:
     try:
@@ -44,14 +44,51 @@ if not _STUB_FORCED:
 _model: Any = None
 
 
+def _resolve_local_ckpt() -> Path | None:
+    """Resolve local checkpoint path if available."""
+    override = os.getenv("FOCUSOS_CKPT", "").strip()
+    if override:
+        ckpt = Path(override).expanduser().resolve()
+        return ckpt if ckpt.is_file() else None
+
+    repo_ckpt = (Path(__file__).resolve().parent.parent / "best.ckpt")
+    if repo_ckpt.is_file():
+        return repo_ckpt
+    return None
+
+
 def _load_model() -> Any:
     """Load and cache the TRIBE v2 model (first call only)."""
     global _model
+    global _MODEL_SOURCE
     if _model is None:
         import tribev2  # type: ignore
 
         print("[FocusOS] Loading TRIBE v2 model (this may take a while)…")
-        _model = tribev2.load_model("facebook/tribev2")
+        ckpt_path = _resolve_local_ckpt()
+
+        if ckpt_path is not None:
+            last_error = None
+            for kwargs in (
+                {"checkpoint_path": str(ckpt_path)},
+                {"ckpt_path": str(ckpt_path)},
+                {"checkpoint": str(ckpt_path)},
+                {"model_path": str(ckpt_path)},
+                {"path": str(ckpt_path)},
+                {"pretrained_model_name_or_path": str(ckpt_path)},
+            ):
+                try:
+                    _model = tribev2.load_model(**kwargs)
+                    _MODEL_SOURCE = f"local_ckpt:{ckpt_path}"
+                    break
+                except TypeError as exc:
+                    last_error = exc
+            if _model is None and last_error is not None:
+                print(f"[FocusOS] Local checkpoint signature not matched ({last_error}); falling back.")
+
+        if _model is None:
+            _model = tribev2.load_model("facebook/tribev2")
+            _MODEL_SOURCE = "huggingface:facebook/tribev2"
         print("[FocusOS] TRIBE v2 model loaded.")
     return _model
 
@@ -202,8 +239,12 @@ def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
 # ── Status helpers ────────────────────────────────────────────────────────────
 
 def model_status() -> dict:
+    mode = "tribe_v2" if (_TRIBE_AVAILABLE and not _STUB_FORCED) else "heuristic_stub"
+    source = _MODEL_SOURCE if mode == "tribe_v2" else "heuristic_stub"
     return {
         "tribe_available": _TRIBE_AVAILABLE,
         "stub_forced":     _STUB_FORCED,
-        "mode":            "tribe_v2" if (_TRIBE_AVAILABLE and not _STUB_FORCED) else "heuristic_stub",
+        "mode":            mode,
+        "model_source":    source,
+        "local_ckpt_found": _resolve_local_ckpt() is not None,
     }
