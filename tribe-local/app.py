@@ -701,7 +701,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       metaEl.style.display = 'block';
       urlEl.textContent    = session.page_url ?? '';
       const ts = session.timestamp
-        ? new Date(session.timestamp).toLocaleTimeString()
+        ? new Date(session.timestamp).toLocaleString()
         : '';
       const secs  = (session.active_seconds ?? 0).toFixed(0);
       const score = (session.page_score ?? 0).toFixed(1);
@@ -726,7 +726,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         row.className = 'block-row';
 
         const labelText = b.tagName
-          ? `${b.tagName}#${b.position ?? ''}`
+          ? `${b.tagName}#${b.position ?? 0}`
           : (b.id ?? '');
 
         row.innerHTML = `

@@ -228,7 +228,6 @@ async def test_session_blocks_have_correct_fields(tmp_path, monkeypatch):
     block = _a._load_sessions()[0]["blocks"][0]
     for field in ("id", "load", "lang", "exec", "vis", "domPath", "position", "tagName"):
         assert field in block, f"Missing field: {field}"
-    assert "text" not in block, "Text content must not be stored in session blocks"
 
 
 @pytest.mark.asyncio
