@@ -331,6 +331,17 @@ async function handleReadingTimeUpdate(seconds, engagedSeconds, tabId) {
     const execMean = _mean(blocksData.map((b) => b.exec ?? 0));
     const visMean  = _mean(blocksData.map((b) => b.vis  ?? 0));
 
+    const sessionBlocks = blocksData.map((b) => ({
+      id:       b.id       ?? '',
+      load:     b.load     ?? 0,
+      lang:     b.lang     ?? 0,
+      exec:     b.exec     ?? 0,
+      vis:      b.vis      ?? 0,
+      domPath:  b.domPath  ?? '',
+      position: b.position ?? 0,
+      tagName:  b.tagName  ?? '',
+    }));
+
     fetch(SESSION_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -343,6 +354,7 @@ async function handleReadingTimeUpdate(seconds, engagedSeconds, tabId) {
         lang_mean:      langMean,
         exec_mean:      execMean,
         vis_mean:       visMean,
+        blocks:         sessionBlocks,
       }),
     }).catch(() => { /* server may not be running */ });
   }
