@@ -62,6 +62,28 @@ SESSION_PAYLOAD = {
     "lang_mean": 0.7,
     "exec_mean": 0.5,
     "vis_mean": 0.2,
+    "blocks": [
+        {
+            "id": "focusos-block-0",
+            "load": 0.72,
+            "lang": 0.80,
+            "exec": 0.60,
+            "vis": 0.45,
+            "domPath": "article > p",
+            "position": 0,
+            "tagName": "p",
+        },
+        {
+            "id": "focusos-block-1",
+            "load": 0.30,
+            "lang": 0.25,
+            "exec": 0.15,
+            "vis": 0.10,
+            "domPath": "footer > p",
+            "position": 1,
+            "tagName": "p",
+        },
+    ],
 }
 
 
@@ -179,4 +201,88 @@ async def test_dashboard_returns_html():
     assert "text/html" in resp.headers["content-type"]
     assert "FocusOS" in resp.text
     assert "chart.js" in resp.text.lower()
+
+
+# ── Per-block activation tests ───────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_session_with_blocks_stored(tmp_path, monkeypatch):
+    """POST /session persists per-block activations."""
+    monkeypatch.setattr(_a, "SESSIONS_FILE", tmp_path / "sessions.json")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post("/session", json=SESSION_PAYLOAD)
+    assert resp.status_code == 200
+    # Verify blocks are persisted
+    sessions = _a._load_sessions()
+    assert len(sessions) == 1
+    assert "blocks" in sessions[0]
+    assert len(sessions[0]["blocks"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_session_blocks_have_correct_fields(tmp_path, monkeypatch):
+    """Stored blocks contain id, load, lang, exec, vis, domPath, position, tagName."""
+    monkeypatch.setattr(_a, "SESSIONS_FILE", tmp_path / "sessions.json")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post("/session", json=SESSION_PAYLOAD)
+    block = _a._load_sessions()[0]["blocks"][0]
+    for field in ("id", "load", "lang", "exec", "vis", "domPath", "position", "tagName"):
+        assert field in block, f"Missing field: {field}"
+    assert "text" not in block, "Text content must not be stored in session blocks"
+
+
+@pytest.mark.asyncio
+async def test_session_blocks_no_text_field(tmp_path, monkeypatch):
+    """Blocks stored in sessions must not contain a 'text' field."""
+    monkeypatch.setattr(_a, "SESSIONS_FILE", tmp_path / "sessions.json")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post("/session", json=SESSION_PAYLOAD)
+    for block in _a._load_sessions()[0]["blocks"]:
+        assert "text" not in block
+
+
+@pytest.mark.asyncio
+async def test_session_blocks_values_in_range(tmp_path, monkeypatch):
+    """Stored block activation values should remain in the expected range."""
+    monkeypatch.setattr(_a, "SESSIONS_FILE", tmp_path / "sessions.json")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post("/session", json=SESSION_PAYLOAD)
+    for block in _a._load_sessions()[0]["blocks"]:
+        for field in ("load", "lang", "exec", "vis"):
+            assert 0.0 <= block[field] <= 1.0, f"{field}={block[field]} out of range"
+
+
+@pytest.mark.asyncio
+async def test_session_without_blocks_defaults_to_empty(tmp_path, monkeypatch):
+    """POST /session without blocks field stores an empty blocks list."""
+    monkeypatch.setattr(_a, "SESSIONS_FILE", tmp_path / "sessions.json")
+    payload_no_blocks = {k: v for k, v in SESSION_PAYLOAD.items() if k != "blocks"}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post("/session", json=payload_no_blocks)
+    assert resp.status_code == 200
+    sessions = _a._load_sessions()
+    assert sessions[0]["blocks"] == []
+
+
+@pytest.mark.asyncio
+async def test_timeline_sessions_include_blocks(tmp_path, monkeypatch):
+    """GET /timeline returns sessions that include the blocks array."""
+    monkeypatch.setattr(_a, "SESSIONS_FILE", tmp_path / "sessions.json")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post("/session", json=SESSION_PAYLOAD)
+        resp = await client.get("/timeline?date=2025-01-01")
+    body = resp.json()
+    session = body["sessions"][0]
+    assert "blocks" in session
+    assert len(session["blocks"]) == len(SESSION_PAYLOAD["blocks"])
+
+
+@pytest.mark.asyncio
+async def test_dashboard_has_playback_section():
+    """GET /dashboard HTML includes the session timeline playback section."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/dashboard")
+    assert "playback-section" in resp.text
+    assert "session-slider" in resp.text
+    assert "block-list" in resp.text
 

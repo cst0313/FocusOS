@@ -112,6 +112,18 @@ class PredictResponse(BaseModel):
     timestamp:  str
 
 
+class SessionBlock(BaseModel):
+    """Per-block brain activation snapshot (no text content)."""
+    id:       str   = Field("",  description="Block identifier set by content.js")
+    load:     float = Field(0.0, description="Weighted cognitive load score (0–1)")
+    lang:     float = Field(0.0, description="Language-network activation (0–1)")
+    exec:     float = Field(0.0, description="Executive-control activation (0–1)")
+    vis:      float = Field(0.0, description="Visual-cortex activation (0–1)")
+    domPath:  str   = Field("",  description="CSS-style DOM path for overlay sync")
+    position: int   = Field(0,   description="Block index on the page")
+    tagName:  str   = Field("",  description="HTML tag name (p, h2, li, …)")
+
+
 class SessionRequest(BaseModel):
     """A reading-time chunk reported by the extension every ~30 seconds."""
     page_url:       str   = Field(..., description="URL of the page being read")
@@ -125,6 +137,10 @@ class SessionRequest(BaseModel):
     lang_mean:      float = Field(0.0, description="Mean language-network activation (0–1)")
     exec_mean:      float = Field(0.0, description="Mean executive-control activation (0–1)")
     vis_mean:       float = Field(0.0, description="Mean visual-cortex activation (0–1)")
+    blocks:         List[SessionBlock] = Field(
+        default_factory=list,
+        description="Per-block brain activation snapshots for this session chunk (no text)",
+    )
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -330,6 +346,104 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       color: var(--muted);
       text-align: center;
     }
+    /* ── Timeline playback ──────────────────────────────────────────── */
+    .playback-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .playback-controls button {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 13px;
+      padding: 5px 12px;
+      transition: background 0.15s;
+      white-space: nowrap;
+    }
+    .playback-controls button:hover { background: rgba(255,255,255,0.07); }
+    .playback-controls input[type=range] {
+      flex: 1;
+      min-width: 120px;
+      accent-color: var(--blue);
+      cursor: pointer;
+    }
+    .playback-counter {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .session-meta {
+      margin-bottom: 14px;
+      padding: 10px 14px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .session-meta .meta-url {
+      font-size: 13px;
+      color: var(--indigo);
+      word-break: break-all;
+      margin-bottom: 4px;
+    }
+    .session-meta .meta-detail {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .block-list-header {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+      gap: 6px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--muted);
+      padding: 4px 6px;
+      margin-bottom: 4px;
+    }
+    .block-row {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+      gap: 6px;
+      align-items: center;
+      padding: 5px 6px;
+      border-radius: 6px;
+      margin-bottom: 3px;
+      background: rgba(255,255,255,0.02);
+    }
+    .block-row:hover { background: rgba(255,255,255,0.05); }
+    .block-id {
+      font-size: 11px;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .bar-cell { display: flex; align-items: center; gap: 5px; }
+    .bar-track {
+      flex: 1;
+      height: 8px;
+      background: rgba(255,255,255,0.07);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.25s;
+    }
+    .bar-val { font-size: 10px; color: var(--muted); width: 30px; text-align: right; }
+    .no-blocks {
+      font-size: 12px;
+      color: var(--muted);
+      padding: 12px 6px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
@@ -373,6 +487,31 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <canvas id="network-chart"></canvas>
   </div>
 
+  <!-- ── Session Timeline Playback ─────────────────────────────────────────── -->
+  <div class="chart-wrap" id="playback-section" style="display:none">
+    <div class="chart-title">Session Timeline Playback</div>
+    <div class="playback-controls">
+      <button id="prev-btn">◀ Prev</button>
+      <input type="range" id="session-slider" min="0" max="0" value="0" />
+      <button id="next-btn">Next ▶</button>
+      <span class="playback-counter" id="session-counter"></span>
+    </div>
+    <div id="session-meta" class="session-meta" style="display:none">
+      <div class="meta-url" id="meta-url"></div>
+      <div class="meta-detail" id="meta-detail"></div>
+    </div>
+    <div id="block-area">
+      <div class="block-list-header" id="block-list-header" style="display:none">
+        <span>Block / Tag</span>
+        <span>Load</span>
+        <span>Lang</span>
+        <span>Exec</span>
+        <span>Vis</span>
+      </div>
+      <div id="block-list"></div>
+    </div>
+  </div>
+
   <div id="empty-msg" class="empty-state" style="display:none">
     <div class="icon">📭</div>
     <p>No data for this date yet.<br>Start browsing with FocusOS tracking enabled.</p>
@@ -387,6 +526,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     const API_BASE = window.location.origin;
     let timelineChart = null;
     let networkChart  = null;
+    let _allSessions  = [];
+    let _sessionIdx   = 0;
 
     // ── Initialise date picker to today ──────────────────────────────────────
     const picker = document.getElementById('date-picker');
@@ -417,6 +558,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         empty.style.display = 'block';
         updateStats([], date);
         destroyCharts();
+        hidePlayback();
         return;
       }
 
@@ -424,6 +566,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
       updateStats(sessions, date);
       renderTimelineChart(sessions);
       renderNetworkChart(sessions);
+      setupPlayback(sessions);
     }
 
     // ── Stats cards ───────────────────────────────────────────────────────────
@@ -499,6 +642,113 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         },
         options: chartOptions('Mean network activation (0–1)'),
       });
+    }
+
+    // ── Session timeline playback ─────────────────────────────────────────────
+    function setupPlayback(sessions) {
+      _allSessions = sessions.slice().sort((a, b) =>
+        new Date(a.timestamp) - new Date(b.timestamp)
+      );
+      _sessionIdx = 0;
+
+      const section = document.getElementById('playback-section');
+      const slider  = document.getElementById('session-slider');
+      section.style.display = 'block';
+      slider.min   = 0;
+      slider.max   = _allSessions.length - 1;
+      slider.value = 0;
+
+      slider.oninput = () => {
+        _sessionIdx = parseInt(slider.value, 10);
+        renderSessionDetail(_sessionIdx);
+      };
+
+      document.getElementById('prev-btn').onclick = () => {
+        if (_sessionIdx > 0) {
+          _sessionIdx--;
+          slider.value = _sessionIdx;
+          renderSessionDetail(_sessionIdx);
+        }
+      };
+
+      document.getElementById('next-btn').onclick = () => {
+        if (_sessionIdx < _allSessions.length - 1) {
+          _sessionIdx++;
+          slider.value = _sessionIdx;
+          renderSessionDetail(_sessionIdx);
+        }
+      };
+
+      renderSessionDetail(0);
+    }
+
+    function hidePlayback() {
+      document.getElementById('playback-section').style.display = 'none';
+    }
+
+    function renderSessionDetail(idx) {
+      const session = _allSessions[idx];
+      if (!session) return;
+
+      // counter
+      document.getElementById('session-counter').textContent =
+        `${idx + 1} / ${_allSessions.length}`;
+
+      // meta
+      const metaEl    = document.getElementById('session-meta');
+      const urlEl     = document.getElementById('meta-url');
+      const detailEl  = document.getElementById('meta-detail');
+      metaEl.style.display = 'block';
+      urlEl.textContent    = session.page_url ?? '';
+      const ts = session.timestamp
+        ? new Date(session.timestamp).toLocaleTimeString()
+        : '';
+      const secs  = (session.active_seconds ?? 0).toFixed(0);
+      const score = (session.page_score ?? 0).toFixed(1);
+      detailEl.textContent =
+        `${ts}  ·  ${secs}s active  ·  load score: ${score}  ·  label: ${session.page_label ?? '—'}`;
+
+      // blocks
+      const blocks = session.blocks ?? [];
+      const header = document.getElementById('block-list-header');
+      const list   = document.getElementById('block-list');
+      list.innerHTML = '';
+
+      if (blocks.length === 0) {
+        header.style.display = 'none';
+        list.innerHTML = '<div class="no-blocks">No per-block data for this session.</div>';
+        return;
+      }
+
+      header.style.display = 'grid';
+      blocks.forEach(b => {
+        const row = document.createElement('div');
+        row.className = 'block-row';
+
+        const labelText = b.tagName
+          ? `${b.tagName}#${b.position ?? ''}`
+          : (b.id ?? '');
+
+        row.innerHTML = `
+          <span class="block-id" title="${b.id ?? ''}">${labelText}</span>
+          ${barCell(b.load ?? 0, '#6366f1')}
+          ${barCell(b.lang ?? 0, '#22c55e')}
+          ${barCell(b.exec ?? 0, '#818cf8')}
+          ${barCell(b.vis  ?? 0, '#eab308')}
+        `;
+        list.appendChild(row);
+      });
+    }
+
+    function barCell(value, color) {
+      const pct = Math.min(Math.max(value, 0), 1) * 100;
+      return `
+        <div class="bar-cell">
+          <div class="bar-track">
+            <div class="bar-fill" style="width:${pct.toFixed(1)}%;background:${color}"></div>
+          </div>
+          <span class="bar-val">${pct.toFixed(0)}%</span>
+        </div>`;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
